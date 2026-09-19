@@ -482,3 +482,206 @@ fn boundaries_survive_into_the_graph() {
         node.boundaries
     );
 }
+
+// ─── Dispatch tables ────────────────────────────────────────────────────
+
+/// Build the graph for a fixture, which is where dispatch tables are
+/// resolved: the surface and its handler are usually in different files, so
+/// the pairing cannot happen in the per-file boundary pass.
+fn graph(files: &[(&str, &str)]) -> ultragraph::types::GraphData {
+    let dir = stage(files);
+    let json = index(dir.path().to_string_lossy().to_string());
+    serde_json::from_str(&ultragraph::build_graph(json)).expect("build_graph")
+}
+
+fn boundaries_of<'a>(
+    g: &'a ultragraph::types::GraphData,
+    name: &str,
+) -> &'a [Boundary] {
+    &g.nodes
+        .iter()
+        .find(|n| n.name == name)
+        .unwrap_or_else(|| panic!("no node named {name:?}"))
+        .boundaries
+}
+
+/// An axum route table names its path in the router and its handler in
+/// another module. Neither half carries the other's name, so the tag has to
+/// be moved across files — and before this, a 45-route server reported zero
+/// inbound HTTP endpoints.
+#[test]
+fn a_route_table_tags_the_handler_it_names_in_another_file() {
+    let g = graph(&[
+        (
+            "src/serve/router.rs",
+            r#"
+            use super::handlers::*;
+            pub fn build_router() -> Router {
+                Router::new()
+                    .route("/api/generate", post(api_generate))
+                    .route("/healthz", get(healthz))
+            }
+            "#,
+        ),
+        (
+            "src/serve/handlers.rs",
+            r#"
+            pub async fn api_generate() -> String { String::new() }
+            pub async fn healthz() -> String { String::new() }
+            "#,
+        ),
+    ]);
+
+    let b = boundaries_of(&g, "api_generate");
+    assert_eq!(b.first().map(|b| b.kind.as_str()), Some("http.endpoint"), "{b:?}");
+    assert_eq!(b.first().and_then(|b| b.detail.as_deref()), Some("POST /api/generate"), "{b:?}");
+    assert_eq!(b.first().map(|b| b.direction), Some(BoundaryDirection::Inbound), "{b:?}");
+
+    let h = boundaries_of(&g, "healthz");
+    assert_eq!(h.first().and_then(|b| b.detail.as_deref()), Some("GET /healthz"), "{h:?}");
+}
+
+/// A hand-rolled CLI registers nothing and annotates nothing: the only
+/// record that `gen` is a command is the arm that dispatches it.
+#[test]
+fn a_subcommand_match_tags_each_handler_with_its_command_word() {
+    let g = graph(&[
+        (
+            "src/cli/mod.rs",
+            r#"
+            fn dispatch(cmd: &str, args: &[String]) {
+                match cmd {
+                    "gen" => run_gen(args),
+                    "index" => run_index(args),
+                    "list" | "ls" => run_list(args),
+                    _ => {}
+                }
+            }
+            "#,
+        ),
+        (
+            "src/cli/cmds.rs",
+            r#"
+            pub fn run_gen(_a: &[String]) {}
+            pub fn run_index(_a: &[String]) {}
+            pub fn run_list(_a: &[String]) {}
+            "#,
+        ),
+    ]);
+
+    let b = boundaries_of(&g, "run_gen");
+    assert_eq!(b.first().map(|b| b.kind.as_str()), Some("cli.command"), "{b:?}");
+    assert_eq!(b.first().and_then(|b| b.detail.as_deref()), Some("gen"), "{b:?}");
+
+    // Aliases are separate things a user types, and both belong on the tag.
+    let l = boundaries_of(&g, "run_list");
+    assert_eq!(l.first().and_then(|b| b.detail.as_deref()), Some("list,ls"), "{l:?}");
+}
+
+/// The discriminator that keeps a parser's `match node.kind()` out of the
+/// command census. Its arms dispatch to functions exactly like a CLI's do;
+/// what differs is that the scrutinee is computed, not handed in.
+#[test]
+fn a_match_on_a_computed_value_is_not_a_command_table() {
+    let g = graph(&[(
+        "src/parse.rs",
+        r#"
+        fn visit(node: &Node) {
+            match node.kind() {
+                "call_expression" => on_call(node),
+                "let_declaration" => on_let(node),
+                "struct_item" => on_struct(node),
+                _ => {}
+            }
+        }
+        fn on_call(_n: &Node) {}
+        fn on_let(_n: &Node) {}
+        fn on_struct(_n: &Node) {}
+        "#,
+    )]);
+
+    assert!(
+        boundaries_of(&g, "on_call").is_empty(),
+        "an AST-kind switch must not register subcommands: {:?}",
+        boundaries_of(&g, "on_call")
+    );
+}
+
+/// Two arms and a fallthrough is a conditional, not a dispatch table.
+#[test]
+fn a_two_arm_string_match_is_not_a_command_table() {
+    let g = graph(&[(
+        "src/pick.rs",
+        r#"
+        fn choose(mode: &str) {
+            match mode {
+                "fast" => go_fast(),
+                "slow" => go_slow(),
+                _ => {}
+            }
+        }
+        fn go_fast() {}
+        fn go_slow() {}
+        "#,
+    )]);
+
+    assert!(boundaries_of(&g, "go_fast").is_empty(), "{:?}", boundaries_of(&g, "go_fast"));
+}
+
+/// An endpoint that shells out to its own binary depends on that
+/// subcommand, and no call-graph edge will ever find it: the two halves are
+/// joined by an argv string at runtime. Without this the blast radius of a
+/// CLI change stops at the process boundary.
+#[test]
+fn spawning_a_known_subcommand_draws_an_edge_to_its_handler() {
+    let g = graph(&[
+        (
+            "src/cli/mod.rs",
+            r#"
+            fn dispatch(cmd: &str, args: &[String]) {
+                match cmd {
+                    "gen" => run_gen(args),
+                    "index" => run_index(args),
+                    "serve" => run_serve(args),
+                    _ => {}
+                }
+            }
+            pub fn run_gen(_a: &[String]) {}
+            pub fn run_index(_a: &[String]) {}
+            pub fn run_serve(_a: &[String]) {}
+            "#,
+        ),
+        (
+            "src/serve/api.rs",
+            r#"
+            pub async fn api_generate() {
+                let exe = std::env::current_exe().unwrap();
+                let mut cmd = Command::new(exe);
+                cmd.arg("gen").arg("-i");
+                cmd.spawn().unwrap();
+            }
+            "#,
+        ),
+    ]);
+
+    let gen_id = g
+        .nodes
+        .iter()
+        .find(|n| n.name == "run_gen")
+        .expect("run_gen node")
+        .id
+        .clone();
+    let src_id = g
+        .nodes
+        .iter()
+        .find(|n| n.name == "api_generate")
+        .expect("api_generate node")
+        .id
+        .clone();
+    assert!(
+        g.edges
+            .iter()
+            .any(|e| &*e.source == src_id.as_str() && &*e.target == gen_id.as_str()),
+        "spawning `ug gen` should reach run_gen"
+    );
+}

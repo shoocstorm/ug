@@ -124,6 +124,7 @@ pub fn process_document(path: &Path, repo_root: Option<&str>) -> Option<FileNode
         lines: total_pages.max(1),
         imports: Vec::new(),
         exports: Vec::new(),
+        dispatch_bindings: Vec::new(),
     })
 }
 

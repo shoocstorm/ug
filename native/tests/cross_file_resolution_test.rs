@@ -812,3 +812,124 @@ pub fn run(xs: Vec<u32>) -> Vec<u32> {
         );
     }
 }
+
+// ─── Two spellings of one path ──────────────────────────────────────────
+
+/// A binary calling into its own library writes the crate's public name
+/// (`ultragraph::cli::run`); the library declares `crate::cli::run`. Same
+/// function, different string, and the exact-path lookup misses — which is
+/// how `main` came to have no outbound edges at all, and with it no path
+/// from the entry point to anything.
+#[test]
+fn a_call_through_the_crate_name_reaches_the_crate_relative_declaration() {
+    let graph = run(&[
+        (
+            "src/main.rs",
+            r#"
+            fn main() {
+                mycrate::cli::run();
+            }
+            "#,
+        ),
+        (
+            "src/cli/mod.rs",
+            r#"
+            pub fn run() {}
+            "#,
+        ),
+    ]);
+
+    assert!(
+        targets(&graph, "main", GraphEdgeType::Calls).contains("run"),
+        "main should reach cli::run through the crate-name spelling; got {:?}",
+        targets(&graph, "main", GraphEdgeType::Calls)
+    );
+}
+
+/// The suffix match is a disambiguation, not a guess: two `run`s under
+/// different modules agree on no suffix long enough to pick one, so the
+/// resolver must draw nothing rather than pick whichever it saw first.
+#[test]
+fn an_ambiguous_path_suffix_draws_no_edge() {
+    let graph = run(&[
+        (
+            "src/main.rs",
+            r#"
+            fn main() {
+                other::run();
+            }
+            "#,
+        ),
+        ("src/a/mod.rs", "pub fn run() {}"),
+        ("src/b/mod.rs", "pub fn run() {}"),
+    ]);
+
+    assert!(
+        targets(&graph, "main", GraphEdgeType::Calls).is_empty(),
+        "an unplaceable name must not resolve to an arbitrary candidate; got {:?}",
+        targets(&graph, "main", GraphEdgeType::Calls)
+    );
+}
+
+/// A handler reached only through `use super::api::*` has no path the
+/// extractor can compose, and dropping it left a router referencing only the
+/// handlers it happened to declare itself.
+#[test]
+fn a_glob_imported_handler_is_still_referenced() {
+    let graph = run(&[
+        (
+            "src/serve/router.rs",
+            r#"
+            use super::api::*;
+            pub fn build_router() -> Router {
+                Router::new().route("/api/thing", get(api_thing))
+            }
+            "#,
+        ),
+        (
+            "src/serve/api.rs",
+            r#"
+            pub async fn api_thing() -> String { String::new() }
+            "#,
+        ),
+    ]);
+
+    assert!(
+        targets(&graph, "build_router", GraphEdgeType::References).contains("api_thing"),
+        "glob-imported handler was not referenced; got {:?}",
+        targets(&graph, "build_router", GraphEdgeType::References)
+    );
+}
+
+/// The glob fallback offers a *path* per glob, never a bare name. A bare
+/// name would match any same-named symbol anywhere in the repo — which is
+/// how a graph-builder loop variable called `call` acquired a reference to
+/// an unrelated test helper of that name.
+#[test]
+fn a_local_binding_does_not_reference_a_same_named_symbol_elsewhere() {
+    let graph = run(&[
+        (
+            "src/build.rs",
+            r#"
+            pub fn resolve_edges(items: Vec<u32>) {
+                for call in items {
+                    edge_for(call);
+                }
+            }
+            fn edge_for(_n: u32) {}
+            "#,
+        ),
+        (
+            "src/helper.rs",
+            r#"
+            pub fn call() {}
+            "#,
+        ),
+    ]);
+
+    assert!(
+        !targets(&graph, "resolve_edges", GraphEdgeType::References).contains("call"),
+        "a loop variable must not reference a same-named function elsewhere; got {:?}",
+        targets(&graph, "resolve_edges", GraphEdgeType::References)
+    );
+}

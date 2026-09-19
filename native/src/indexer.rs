@@ -70,7 +70,14 @@ use tree_sitter::Parser;
 /// existing install keeps the unresolved one for every file it does not
 /// happen to re-parse — and the resulting call graph would be repaired only
 /// in the files someone edited.
-const INDEXER_VERSION: &str = "6";
+/// 7: `FileNode::dispatch_bindings` — an axum route table's rows, which put
+/// `POST /api/generate` on the handler instead of nowhere. Cached FileNodes
+/// predate the field and deserialize with it empty, so without this bump a
+/// repo's HTTP surface would appear only for the files someone happened to
+/// touch. Rust value references also keep their bare name when no import
+/// resolves them, which is what makes a glob-imported handler reachable at
+/// all; that too is cached per file.
+const INDEXER_VERSION: &str = "7";
 
 /// Reserved key in `cache.json`. Prefixed and suffixed so it cannot collide
 /// with a repo-relative path.
@@ -167,6 +174,11 @@ fn process_file_content(
         lines: content.lines().count() as u32,
         imports,
         exports,
+        // Deliberately not folded into `boundary::annotate`: the handler a
+        // route names is usually in another file, so the tag can only be
+        // placed once every file is in hand. Carried on the FileNode until
+        // then.
+        dispatch_bindings: indexer.extract_dispatch_bindings(source, root),
     })
 }
 

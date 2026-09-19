@@ -26,7 +26,7 @@ mod python;
 mod rust;
 mod typescript;
 
-use crate::types::{ExportInfo, ImportInfo, Symbol};
+use crate::types::{ExportInfo, ImportInfo, DispatchBinding, Symbol};
 use tree_sitter::Node;
 
 /// Where a file sits and what it pulled in — everything an extractor needs to
@@ -66,6 +66,18 @@ pub trait LanguageIndexer: Send + Sync {
     /// Walk the AST and extract every symbol the language exposes
     /// (functions, classes, variables, type aliases, etc.).
     fn extract_symbols(&self, source: &[u8], root: Node, ctx: &FileContext) -> Vec<Symbol>;
+
+    /// Route tables this file declares, as verb/path/handler triples.
+    ///
+    /// Defaults to none: most languages register a route with a decorator on
+    /// the handler itself, which [`crate::indexer::boundary`] already reads
+    /// off the symbol. This exists for the frameworks that keep the table
+    /// somewhere else entirely — axum, Express, Gin — where the path and the
+    /// function it names are in different files and neither carries the
+    /// other's name.
+    fn extract_dispatch_bindings(&self, _source: &[u8], _root: Node) -> Vec<DispatchBinding> {
+        Vec::new()
+    }
 }
 
 /// Look up the indexer responsible for a given file extension. Returns

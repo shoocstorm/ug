@@ -114,6 +114,14 @@ pub struct QueryAnswer {
     /// file), `files` (the diff_* presets — each missing path listed) and
     /// `symbol` (test_for) when the result is empty; raw GQL leaves it empty.
     pub target_not_indexed: Vec<String>,
+    /// A `target` given as a symbol and answered as its file: the symbol as
+    /// asked for, and the path actually queried.
+    ///
+    /// The `TARGET` presets anchor on `n.file`, but "what does a change to
+    /// this reach" is a question people ask about a *function*. Silently
+    /// answering a different question would be worse than the old refusal,
+    /// so the substitution is carried out here and stated in the output.
+    pub target_resolved_from: Option<(String, String)>,
     /// The window of rows to render. Every count reported alongside the
     /// table is over the *whole* result, not this window.
     pub window: range::RowRange,
@@ -178,7 +186,7 @@ pub async fn run(
     store: &dyn KnowledgeStore,
     params: &AnalyzeParams,
 ) -> Result<QueryAnswer, String> {
-    let (title, description, gql, bound) = resolve(params)?;
+    let (title, description, gql, mut bound) = resolve(params)?;
 
     // Resolve the window before touching the store: a malformed range is
     // the caller's mistake and should not cost a query to discover.
@@ -197,6 +205,22 @@ pub async fn run(
     };
 
     let limits = QueryLimits::default();
+
+    // A `target` that cannot be a path is almost certainly a symbol, and
+    // "what does a change to `index_with_cache` reach" is the question
+    // people actually bring to these presets. Resolve it to the file the
+    // query can anchor on, before the query rather than after, so the answer
+    // is about what was asked instead of a warning that it was not a file.
+    let mut target_resolved_from = None;
+    if let Some(QueryValue::Str(target)) = bound.get("target") {
+        let target = target.clone();
+        if !looks_like_path(&target) {
+            if let Some(file) = symbol_target_file(store, &target, &limits).await {
+                bound.insert("target".to_string(), QueryValue::Str(file.clone()));
+                target_resolved_from = Some((target, file));
+            }
+        }
+    }
 
     let page = store
         .execute_query(&gql, &bound, &limits)
@@ -235,6 +259,7 @@ pub async fn run(
         unindexed,
         empty_index,
         target_not_indexed,
+        target_resolved_from,
         window,
         gql,
         from_preset: params.preset.is_some(),
@@ -255,7 +280,16 @@ async fn missing_anchors(
 
     // Single file: `target` (impact, retest_scope, boundary_impact, …).
     if let Some(QueryValue::Str(target)) = bound.get("target") {
-        if matches!(target_file_indexed(store, target, limits).await, Ok(false)) {
+        // Not indexed means *nothing* carries the name — not merely that it
+        // is not a file. A symbol target has already been rewritten to its
+        // file by the time this runs, so anything still failing the file
+        // probe gets one more chance as a symbol before being called a typo.
+        // Reporting `index_with_cache` as "never ingested" when the function
+        // is right there is worse than saying nothing: it is the one caveat
+        // the tool tells callers to trust absolutely.
+        if matches!(target_file_indexed(store, target, limits).await, Ok(false))
+            && matches!(symbol_indexed(store, target, limits).await, Ok(false))
+        {
             missing.push(target.clone());
         }
     }
@@ -319,6 +353,49 @@ async fn symbol_indexed(
         .await
         .map(|p| !p.rows.is_empty())
         .map_err(|e| e.to_string())
+}
+
+/// The file a symbol lives in, by node id or by bare name.
+///
+/// Only ever consulted for a `target` that cannot be a path, and only
+/// returns a file when exactly one symbol answers to the name — two
+/// functions called `parse` give no basis for picking one, and quietly
+/// analysing whichever came first is how a blast radius becomes fiction.
+async fn symbol_target_file(
+    store: &dyn KnowledgeStore,
+    target: &str,
+    limits: &QueryLimits,
+) -> Option<String> {
+    let mut params = QueryParams::new();
+    params.insert("target".to_string(), QueryValue::Str(target.to_string()));
+    let probe = "MATCH (n) WHERE elementKey(n) = $target OR n.name = $target \
+                 RETURN DISTINCT n.file AS file LIMIT 2";
+    let page = store.execute_query(probe, &params, limits).await.ok()?;
+    if page.rows.len() != 1 {
+        return None;
+    }
+    match page.rows.first()?.first()? {
+        QueryValue::Str(file) if !file.is_empty() => Some(file.clone()),
+        _ => None,
+    }
+}
+
+/// Whether `target` is shaped like a repo path rather than a symbol name.
+///
+/// A path has a directory separator or a file extension; `index_with_cache`
+/// has neither. Wrong only in the harmless direction: a misjudged path
+/// costs one extra probe that finds nothing.
+fn looks_like_path(target: &str) -> bool {
+    if target.contains('/') {
+        return true;
+    }
+    match target.rsplit_once('.') {
+        // An extension is short and alphanumeric. `Db.open` is not a path.
+        Some((_, ext)) => {
+            !ext.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        }
+        None => false,
+    }
 }
 
 /// Turn the request into a query and its bound parameters.

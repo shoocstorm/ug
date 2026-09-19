@@ -331,6 +331,37 @@ pub struct FileNode {
     pub imports: Vec<ImportInfo>,
     #[serde(default)]
     pub exports: Vec<ExportInfo>,
+    /// Dispatch tables this file declares — `POST /api/generate →
+    /// api_generate` for an axum `.route(..)`, `gen → run_gen` for a
+    /// subcommand `match`.
+    ///
+    /// File-level rather than per-symbol because the two halves live apart:
+    /// the surface is written in the table, the handler it names is usually
+    /// in another module, and the tag belongs on the handler. Resolving that
+    /// needs every file at once, so the pairing is recorded here and spent
+    /// in [`crate::graph::build`].
+    #[serde(default, rename = "dispatchBindings", skip_serializing_if = "Vec::is_empty")]
+    pub dispatch_bindings: Vec<DispatchBinding>,
+}
+
+/// One row of a dispatch table: an externally-visible surface and the
+/// function registered to serve it. See [`FileNode::dispatch_bindings`].
+///
+/// The two framework shapes this covers — a route table and a subcommand
+/// `match` — differ only in what the surface is called, so they share a
+/// type rather than duplicating the cross-file resolution each would need.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DispatchBinding {
+    /// Boundary kind this row declares: `http.endpoint` or `cli.command`.
+    pub kind: String,
+    /// Wire protocol or mechanism: `http`, `cli`.
+    pub protocol: String,
+    /// The surface as a person would search for it — `POST /api/generate`,
+    /// or the subcommand word.
+    pub surface: String,
+    /// The handler as the table spelled it — a bare name or a path.
+    /// Resolved against the symbol tables, never assumed to be local.
+    pub handler: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -880,6 +911,12 @@ pub struct ResolutionStats {
     /// Callee named outright by a module path — the strongest evidence.
     #[serde(rename = "resolvedQualified")]
     pub resolved_qualified: u32,
+    /// Callee matched on a shared path *suffix* rather than the whole path —
+    /// the same symbol spelled two ways (`crate::cli::run` declared,
+    /// `ultragraph::cli::run` called). Unambiguous, but weaker evidence than
+    /// an exact path, so it is counted apart.
+    #[serde(rename = "resolvedPathSuffix", default)]
+    pub resolved_path_suffix: u32,
     /// Resolved through a receiver whose type this file could infer.
     #[serde(rename = "resolvedTyped")]
     pub resolved_typed: u32,

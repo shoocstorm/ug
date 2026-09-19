@@ -68,6 +68,22 @@ pub fn render(answer: &QueryAnswer, style: Render) -> String {
     let page = &answer.page;
     if page.rows.is_empty() {
         out.push_str("\nNo rows matched.\n");
+        // A bare "no rows" from a preset whose anchor *is* indexed reads as
+        // a real zero, and for a sparse property it usually is not. Naming
+        // the thinnest property the query depends on turns a dead end into
+        // something the caller can act on: `boundary_impact` returning
+        // nothing because 1% of nodes carry `boundary_kinds` is a coverage
+        // problem, not an absence of boundaries.
+        if answer.from_preset && answer.target_not_indexed.is_empty() && !answer.empty_index {
+            if let Some(thin) = thinnest_property(answer) {
+                out.push_str(&format!(
+                    "This may be coverage, not absence: only {} of nodes carry `{}`, \
+                     which this preset filters on.\n",
+                    pct(thin.present, thin.total),
+                    thin.property,
+                ));
+            }
+        }
         push_caveats(&mut out, answer, style);
         return out;
     }
@@ -290,6 +306,16 @@ fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
         ));
     }
 
+    if let Some((symbol, file)) = &answer.target_resolved_from {
+        // Said even when rows came back: the numbers below are for the whole
+        // file, which is a larger thing than the symbol that was asked about.
+        out.push_str(&format!(
+            "\nℹ {symbol} is a symbol; these presets anchor on files, so this \
+             answer is about {file} — every symbol in it, not only {symbol}. \
+             `find_usages {symbol}` is the symbol-level question.\n",
+        ));
+    }
+
     if !answer.target_not_indexed.is_empty() {
         // One missing anchor or many read the same way: the empty result is
         // a typo (or paths ingest never saw), not a real zero. Naming them
@@ -328,6 +354,34 @@ fn push_caveats(out: &mut String, answer: &QueryAnswer, style: Render) {
             .collect();
         out.push_str(&style.dim(&format!("\ncoverage: {}\n", parts.join(" · "))));
     }
+}
+
+/// `present/total` as a rounded percentage, the same spelling the coverage
+/// line uses.
+fn pct(present: usize, total: usize) -> String {
+    format!("{:.0}%", 100.0 * present as f64 / total.max(1) as f64)
+}
+
+/// The sparsest property this query depends on, when it is sparse enough to
+/// be the likely reason for an empty answer.
+///
+/// Absent properties are already reported by their own caveat, so this looks
+/// only at the thinly-populated ones — the case that produces a confidently
+/// wrong zero rather than a warning.
+fn thinnest_property(answer: &QueryAnswer) -> Option<&Coverage> {
+    const THIN: f64 = 0.10;
+    answer
+        .coverage
+        .iter()
+        .filter(|c| !c.is_absent() && !c.index_is_empty())
+        .filter(|c| (c.present as f64) < THIN * c.total as f64)
+        .min_by(|a, b| {
+            let (x, y) = (
+                a.present as f64 / a.total.max(1) as f64,
+                b.present as f64 / b.total.max(1) as f64,
+            );
+            x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)
+        })
 }
 
 fn pad(s: &str, width: usize, right_align: bool) -> String {
@@ -423,6 +477,7 @@ mod tests {
             .collect();
         let empty_index = !coverage.is_empty() && coverage.iter().all(|c| c.index_is_empty());
         QueryAnswer {
+            target_resolved_from: None,
             title: "test".into(),
             description: None,
             page,
@@ -445,6 +500,57 @@ mod tests {
             warnings: Vec::new(),
             truncated: false,
         }
+    }
+
+    /// The caveat that matters most has to be true. `boundary_impact
+    /// index_with_cache` reported the function as "a typo, or never
+    /// ingested" while it sat in the index — and this is the one warning the
+    /// tool's own documentation tells callers to trust absolutely.
+    #[test]
+    fn a_symbol_target_is_answered_as_its_file_not_called_a_typo() {
+        let mut a = answer(page(&["surface"], vec![vec![QueryValue::Str("x".into())]]), vec![]);
+        a.target_resolved_from =
+            Some(("index_with_cache".into(), "native/src/indexer.rs".into()));
+        let out = render(&a, Render::Markdown);
+        assert!(!out.contains("NOT INDEXED"), "{out}");
+        assert!(out.contains("is a symbol"), "{out}");
+        assert!(out.contains("native/src/indexer.rs"), "{out}");
+        // The substitution has to be stated, not silently performed: the
+        // answer covers more than the symbol asked about.
+        assert!(out.contains("not only index_with_cache"), "{out}");
+    }
+
+    /// An empty answer from a preset filtering on a property 3% of nodes
+    /// carry is a coverage problem wearing the shape of a real zero.
+    #[test]
+    fn an_empty_preset_result_names_the_property_that_is_barely_populated() {
+        let mut a = answer(
+            page(&["surface"], vec![]),
+            vec![
+                Coverage { property: "file".into(), present: 2280, total: 2280 },
+                Coverage { property: "boundary_kinds".into(), present: 60, total: 2280 },
+            ],
+        );
+        a.from_preset = true;
+        let out = render(&a, Render::Markdown);
+        assert!(out.contains("No rows matched"), "{out}");
+        assert!(out.contains("coverage, not absence"), "{out}");
+        assert!(out.contains("boundary_kinds"), "{out}");
+        assert!(!out.contains("`file`"), "the fully-populated property is not the suspect: {out}");
+    }
+
+    /// A genuinely empty result over well-populated properties is a real
+    /// zero, and hedging it would train the reader to discount every empty
+    /// answer.
+    #[test]
+    fn an_empty_result_over_populated_properties_is_not_hedged() {
+        let mut a = answer(
+            page(&["surface"], vec![]),
+            vec![Coverage { property: "file".into(), present: 2280, total: 2280 }],
+        );
+        a.from_preset = true;
+        let out = render(&a, Render::Markdown);
+        assert!(!out.contains("coverage, not absence"), "{out}");
     }
 
     #[test]

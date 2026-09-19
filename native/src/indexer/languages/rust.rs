@@ -28,8 +28,8 @@ use crate::indexer::scope::{
     TypeEnv, CTOR, MEMBER_SEP,
 };
 use crate::types::{
-    Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
-    SymbolMetrics,
+    Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, DispatchBinding, Signature,
+    Symbol, SymbolMetrics,
 };
 use std::collections::HashMap;
 use tree_sitter::Node;
@@ -82,6 +82,264 @@ impl LanguageIndexer for RustIndexer {
         attach_impl_traits(&mut symbols, &impl_traits);
         symbols
     }
+
+    fn extract_dispatch_bindings(&self, source: &[u8], root: Node) -> Vec<DispatchBinding> {
+        let mut out = Vec::new();
+        collect_dispatch_bindings(root, source, &mut out);
+        out
+    }
+}
+
+/// HTTP verbs axum's `routing` module exposes as route-builder functions.
+/// `any` is included and normalises to `ANY`, which is what it means.
+const AXUM_METHOD_FNS: &[&str] = &[
+    "get", "post", "put", "delete", "patch", "head", "options", "trace", "any",
+];
+
+/// Walk for `.route("<path>", <verb>(<handler>))` and record what it binds.
+///
+/// axum is the case the annotation-driven rules cannot reach: the path is a
+/// string literal in a builder chain, the handler is a bare identifier passed
+/// as a value, and the two are usually in different modules. Reading the pair
+/// here is what lets the graph put `POST /api/generate` on `api_generate`
+/// rather than on the 300-line function that happens to own the table.
+fn collect_dispatch_bindings(node: Node, source: &[u8], out: &mut Vec<DispatchBinding>) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "call_expression" => {
+                if let Some(binding) = route_binding_for(&child, source) {
+                    out.extend(binding);
+                }
+            }
+            "match_expression" => out.extend(command_bindings_for(&child, source)),
+            _ => {}
+        }
+        collect_dispatch_bindings(child, source, out);
+    }
+}
+
+/// How many string-literal arms a `match` needs before it counts as a
+/// command table rather than an ordinary string comparison.
+///
+/// Two arms and an else is a conditional; a dispatch table is a list. The
+/// floor is what keeps `match ext { "ts" => .., "js" => .. }` out of the
+/// boundary census.
+const MIN_DISPATCH_ARMS: usize = 3;
+
+/// A subcommand `match` — `match cmd { "gen" => run_gen(args), .. }` —
+/// as one binding per command word.
+///
+/// The other half of what the clap rule cannot see. A hand-rolled CLI
+/// registers nothing and annotates nothing: the only record that `gen` is a
+/// command is the arm that dispatches it, so the arm is what gets read. This
+/// repo's own 40 subcommands were invisible for exactly that reason.
+fn command_bindings_for(node: &Node, source: &[u8]) -> Vec<DispatchBinding> {
+    // The scrutinee has to be a value someone was handed, not one this code
+    // computed. A command arrives as a variable (`match cmd`) or a field
+    // (`match self.name`); `match node.kind()` is a parser switching on an
+    // AST node type, and tagging those 3 arms `cli.command` would put
+    // `call_expression` in the repo's list of subcommands. It did, before
+    // this check.
+    let Some(scrutinee) = node.child_by_field_name("value") else {
+        return Vec::new();
+    };
+    if !matches!(
+        strip_reference(&scrutinee).kind(),
+        "identifier" | "field_expression" | "self"
+    ) {
+        return Vec::new();
+    }
+
+    let Some(body) = node.child_by_field_name("body") else {
+        return Vec::new();
+    };
+
+    let mut bindings = Vec::new();
+    let mut cursor = body.walk();
+    for arm in body.children(&mut cursor) {
+        if arm.kind() != "match_arm" {
+            continue;
+        }
+        let (Some(pattern), Some(value)) = (
+            arm.child_by_field_name("pattern"),
+            arm.child_by_field_name("value"),
+        ) else {
+            continue;
+        };
+        let Some(handler) = dispatched_handler(&value, source) else {
+            continue;
+        };
+        // `"help" | "-h" | "--help"` is one handler under three names, and
+        // all three are real things a user types.
+        for surface in string_literals_in(&pattern, source) {
+            bindings.push(DispatchBinding {
+                kind: "cli.command".to_string(),
+                protocol: "cli".to_string(),
+                surface,
+                handler: handler.clone(),
+            });
+        }
+    }
+
+    // Count distinct commands, not arms: an alias list must not be what
+    // pushes a two-branch conditional over the line.
+    let distinct: std::collections::HashSet<&str> =
+        bindings.iter().map(|b| b.handler.as_str()).collect();
+    if distinct.len() < MIN_DISPATCH_ARMS {
+        return Vec::new();
+    }
+    bindings
+}
+
+/// Look through `&x` / `&*x` to the value being borrowed. `match &cmd` and
+/// `match cmd` are the same dispatch.
+fn strip_reference<'a>(node: &Node<'a>) -> Node<'a> {
+    let mut current = *node;
+    while matches!(current.kind(), "reference_expression" | "unary_expression") {
+        match current.child_by_field_name("value") {
+            Some(inner) => current = inner,
+            None => break,
+        }
+    }
+    current
+}
+
+/// The repo function a match arm dispatches to, if it plainly dispatches to
+/// one.
+///
+/// Deliberately narrow. The callee must be a free function named directly or
+/// by module path — not a method, and not a capitalised name, which in an
+/// arm body is a `Ok(..)` / `Some(..)` wrapper rather than a handler. That
+/// restraint is what keeps this off the MCP server's `match name { .. }`,
+/// whose arms all wrap their real work in `Ok(..)` and a closure.
+fn dispatched_handler(value: &Node, source: &[u8]) -> Option<String> {
+    if value.kind() == "call_expression" {
+        if let Some(func) = value.child_by_field_name("function") {
+            if matches!(func.kind(), "identifier" | "scoped_identifier") {
+                if let Some(text) = get_node_text(Some(func), source) {
+                    let tail = text.rsplit("::").next().unwrap_or(&text);
+                    let initial = tail.chars().next()?;
+                    if initial.is_lowercase() {
+                        return Some(text);
+                    }
+                }
+            }
+        }
+    }
+    let mut cursor = value.walk();
+    for child in value.children(&mut cursor) {
+        // A call inside a closure is not what the arm dispatches to — it is
+        // what something the arm builds will call later. `"get_code" =>
+        // from_value(..).map(|p| get_code_source_ids(..))` is a parameter
+        // parser, not a command, and reading through the closure made three
+        // such helpers look like subcommands.
+        if child.kind() == "closure_expression" {
+            continue;
+        }
+        if let Some(found) = dispatched_handler(&child, source) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Every string literal's contents inside a match pattern, so an or-pattern
+/// of aliases yields each alias.
+fn string_literals_in(pattern: &Node, source: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    if pattern.kind() == "string_literal" {
+        if let Some(text) = get_node_text(Some(*pattern), source) {
+            let unquoted = text.trim_matches('"');
+            if !unquoted.is_empty() {
+                out.push(unquoted.to_string());
+            }
+        }
+        return out;
+    }
+    let mut cursor = pattern.walk();
+    for child in pattern.children(&mut cursor) {
+        out.extend(string_literals_in(&child, source));
+    }
+    out
+}
+
+/// The bindings one `.route(..)` call declares, if it is one.
+///
+/// Returns several when a path is registered for several verbs in one go —
+/// `.route("/x", get(read).post(write))` is two routes, not one.
+fn route_binding_for(call: &Node, source: &[u8]) -> Option<Vec<DispatchBinding>> {
+    // `.route(..)`: a method call, so the callee is a field expression whose
+    // field is the name we want.
+    let func = call.child_by_field_name("function")?;
+    if func.kind() != "field_expression" {
+        return None;
+    }
+    if get_node_text(func.child_by_field_name("field"), source).as_deref() != Some("route") {
+        return None;
+    }
+
+    let path = first_string_arg(call, "arguments", source)?;
+    // A route path is a path. Without this, `.route(cfg, handler)` in some
+    // unrelated builder would register a "route" named after a variable.
+    if !path.starts_with('/') {
+        return None;
+    }
+
+    let args = call.child_by_field_name("arguments")?;
+    let mut bindings = Vec::new();
+    let mut cursor = args.walk();
+    for arg in args.children(&mut cursor) {
+        collect_method_handlers(&arg, source, &path, &mut bindings);
+    }
+    (!bindings.is_empty()).then_some(bindings)
+}
+
+/// Pull `<verb>(<handler>)` out of a route's second argument, following the
+/// `.post(..)` chain that axum's `MethodRouter` builds for multi-verb routes.
+fn collect_method_handlers(
+    node: &Node,
+    source: &[u8],
+    path: &str,
+    out: &mut Vec<DispatchBinding>,
+) {
+    if node.kind() == "call_expression" {
+        if let Some(func) = node.child_by_field_name("function") {
+            // `get(h)` names the verb directly; `get(h).post(h2)` names the
+            // second through a field expression on the first.
+            let verb = match func.kind() {
+                "identifier" | "scoped_identifier" => get_node_text(Some(func), source)
+                    .map(|t| t.rsplit("::").next().unwrap_or(&t).to_string()),
+                "field_expression" => get_node_text(func.child_by_field_name("field"), source),
+                _ => None,
+            };
+            if let Some(verb) = verb.filter(|v| AXUM_METHOD_FNS.contains(&v.as_str())) {
+                if let Some(handler) = first_identifier_arg(node, source) {
+                    out.push(DispatchBinding {
+                        kind: "http.endpoint".to_string(),
+                        protocol: "http".to_string(),
+                        surface: format!("{} {}", verb.to_uppercase(), path),
+                        handler,
+                    });
+                }
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_method_handlers(&child, source, path, out);
+    }
+}
+
+/// The first argument that is a plain identifier or path — the handler in
+/// `get(api_health)` or `get(api::health)`.
+fn first_identifier_arg(call: &Node, source: &[u8]) -> Option<String> {
+    let args = call.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let found = args
+        .children(&mut cursor)
+        .find(|a| matches!(a.kind(), "identifier" | "scoped_identifier"))?;
+    get_node_text(Some(found), source)
 }
 
 /// Everything the walk needs that the AST node itself doesn't carry.
@@ -675,9 +933,25 @@ fn record_value_refs(
         if looks_like_constant(tail) {
             continue;
         }
-        if let Some(fqn) = ctx.scope.resolve_path(&text) {
-            if !value_refs.contains(&fqn) {
-                value_refs.push(fqn);
+        // A glob import (`use super::projects_api::*`) gives `resolve_path`
+        // nothing to compose, which is how a router file full of
+        // `.route("/x", get(handler))` ended up referencing only the
+        // handlers it happened to declare itself. Offer one candidate path
+        // per glob instead: a guess that names a module is checked against
+        // the real symbol table and discarded when wrong, where a bare name
+        // would match any symbol in the repo spelled the same way.
+        // Both spellings, not one or the other: an unbound name does not
+        // make `resolve_path` fail — it re-roots the name under the current
+        // module, which is right for a local and wrong for a glob import,
+        // and nothing here can tell which. Emitting both lets the symbol
+        // table decide; the wrong one names a module that has no such
+        // symbol and matches nothing.
+        let mut candidates = Vec::new();
+        candidates.extend(ctx.scope.resolve_path(&text));
+        candidates.extend(ctx.scope.glob_candidates(tail));
+        for candidate in candidates {
+            if !value_refs.contains(&candidate) {
+                value_refs.push(candidate);
             }
         }
     }

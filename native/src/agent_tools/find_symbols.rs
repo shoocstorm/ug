@@ -56,8 +56,42 @@ pub struct SymbolQueryResult {
     pub kind: &'static str,
     pub total: usize,
     pub items: Vec<SymbolRef>,
+    /// Names that matched but were removed by a filter. Only meaningful
+    /// when `items` is empty, where it is the difference between "no such
+    /// name" and "that name is not a boundary".
+    #[serde(skip_serializing_if = "ExcludedByFilter::is_empty")]
+    pub excluded: ExcludedByFilter,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// How many name matches each filter removed.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ExcludedByFilter {
+    #[serde(rename = "nodeType")]
+    pub node_type: usize,
+    #[serde(rename = "filePrefix")]
+    pub file_prefix: usize,
+    pub boundary: usize,
+}
+
+impl ExcludedByFilter {
+    pub fn is_empty(&self) -> bool {
+        self.node_type == 0 && self.file_prefix == 0 && self.boundary == 0
+    }
+
+    /// The filter that removed the most, as a phrase naming it and what
+    /// relaxing it would do.
+    pub fn dominant(&self) -> Option<(&'static str, usize)> {
+        [
+            ("boundary", self.boundary),
+            ("filePrefix", self.file_prefix),
+            ("nodeTypes", self.node_type),
+        ]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .max_by_key(|(_, n)| *n)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,6 +131,7 @@ pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResu
                     kind: "name",
                     total: 0,
                     items: vec![],
+                    excluded: ExcludedByFilter::default(),
                     error: Some(e.clone()),
                 })
                 .collect();
@@ -111,6 +146,7 @@ pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResu
                 kind: "id",
                 total: 1,
                 items: vec![SymbolRef::from_node(n)],
+                excluded: ExcludedByFilter::default(),
                 error: None,
             },
             None => SymbolQueryResult {
@@ -118,6 +154,7 @@ pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResu
                 kind: "id",
                 total: 0,
                 items: vec![],
+                excluded: ExcludedByFilter::default(),
                 error: Some(format!(
                     "No node with id '{}' — ids come from find_symbols, search or file_outline.",
                     id
@@ -135,6 +172,7 @@ pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResu
                     kind: "pattern",
                     total: 0,
                     items: vec![],
+                    excluded: ExcludedByFilter::default(),
                     error: Some(e),
                 });
                 continue;
@@ -142,16 +180,33 @@ pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResu
         };
         let glob = matcher.is_glob();
         let mut hits: Vec<(u8, &GraphNode)> = Vec::new();
+        // Names that matched and were then excluded by a filter. "No
+        // matches, try a shorter fragment" is the wrong advice when the
+        // fragment was perfect and `boundary: true` is what dropped it —
+        // the caller shortens a name that was never the problem.
+        let mut excluded = ExcludedByFilter::default();
         for n in &graph.nodes {
+            // Filters are applied after the name test, not before, so a
+            // near-miss can be reported as one. The name test is pure, so
+            // the order costs nothing but a little arithmetic on rows that
+            // were going to be skipped anyway.
+            let name_matches = if glob {
+                matcher.matches(&n.name)
+            } else {
+                literal_rank(&n.name, &matcher, false, n) < 4
+            };
             if !type_allowed(&types, n) {
+                excluded.node_type += usize::from(name_matches);
                 continue;
             }
             if let Some(f) = &file_filter {
                 if !f.matches(n.file.as_deref().unwrap_or("")) {
+                    excluded.file_prefix += usize::from(name_matches);
                     continue;
                 }
             }
             if p.boundary && n.boundaries.is_empty() {
+                excluded.boundary += usize::from(name_matches);
                 continue;
             }
             // A wildcard is an explicit statement of what the name looks
@@ -198,6 +253,7 @@ pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResu
                 .take(limit)
                 .map(|(_, n)| SymbolRef::from_node(n))
                 .collect(),
+            excluded,
             error: None,
         });
     }
@@ -272,6 +328,26 @@ pub fn render_find_symbols(r: &FindSymbolsResult, style: Render) -> String {
             out.push('\n');
         }
         if q.items.is_empty() {
+            // The name was right and a filter is what dropped it. Say that
+            // instead of advising a shorter fragment, which would send the
+            // caller to widen the one part of the query that worked.
+            if let Some((filter, n)) = q.excluded.dominant() {
+                line(
+                    &mut out,
+                    &format!(
+                        "No matches. {} name{} match{} '{}' but {} excluded by {}. \
+                         Drop that filter to see {}.",
+                        n,
+                        if n == 1 { "" } else { "s" },
+                        if n == 1 { "es" } else { "" },
+                        q.query,
+                        if n == 1 { "was" } else { "were" },
+                        style.id(filter),
+                        if n == 1 { "it" } else { "them" },
+                    ),
+                );
+                continue;
+            }
             // Each suggestion is a different failure: too specific a string,
             // too narrow a filter, or the wrong tool entirely.
             let widen = if q.kind == "pattern" {

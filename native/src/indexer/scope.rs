@@ -159,6 +159,31 @@ impl ImportScope {
         }
     }
 
+    /// Every module brought in wholesale by a glob (`use super::api::*`).
+    ///
+    /// A glob binds an unknown set of names, so a name it might have
+    /// supplied cannot be resolved here — but it can be *guessed at*, once
+    /// per glob, and checked against the real symbol table later. That is
+    /// strictly better than the two alternatives: dropping the reference
+    /// (which hid every handler in a glob-imported router) or falling back
+    /// to the bare name (which matches any same-named symbol in the repo,
+    /// and pointed a graph-builder loop variable called `call` at an
+    /// unrelated test helper).
+    pub fn glob_bases(&self) -> impl Iterator<Item = &str> {
+        self.aliases
+            .iter()
+            .filter(|(k, _)| k.starts_with('*'))
+            .map(|(_, base)| base.as_str())
+    }
+
+    /// Compose `base<sep>name` for every glob base in scope.
+    pub fn glob_candidates(&self, name: &str) -> Vec<String> {
+        self.glob_bases()
+            .filter(|b| !b.is_empty())
+            .map(|b| format!("{}{}{}", b, self.sep, name))
+            .collect()
+    }
+
     /// Bind a submodule this file *declares* rather than imports — Rust's
     /// `mod cli;`, whose contents live in `cli.rs` or `cli/mod.rs`.
     ///

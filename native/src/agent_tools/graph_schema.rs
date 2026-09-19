@@ -49,6 +49,18 @@ pub struct GraphSchemaResult {
     /// as untested production code — a wrong answer wearing the shape of a
     /// right one, which is exactly what this manifest exists to flag.
     pub stale_test_flags: bool,
+    /// How confidently each call site was resolved into an edge.
+    ///
+    /// The edge set is best-effort: a callee the resolver cannot place
+    /// uniquely produces no edge at all, by design (see
+    /// `graph::build::pick_best`). Most drops are calls into the standard
+    /// library or a third-party crate and *should* be dropped — but an
+    /// ambiguous in-repo name lands in the same bucket, and nothing else in
+    /// the output distinguishes them. Without this, an empty `find_usages`
+    /// reads as "nothing calls it" when it may mean "the call sites could
+    /// not be placed". Absent on a graph built before the stats existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_resolution: Option<crate::types::ResolutionStats>,
 }
 
 pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
@@ -133,6 +145,7 @@ pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
         // untested production code, which is a wrong answer that looks
         // exactly like a right one.
         stale_test_flags: schema.map(|v| v < 6).unwrap_or(true),
+        call_resolution: graph.resolution.clone(),
     }
 }
 
@@ -256,6 +269,37 @@ pub fn render_graph_schema(r: &GraphSchemaResult, style: Render) -> String {
             "    calls are missing. Treat find_usages, impact and dead_code as indicative,",
         );
         line(&mut out, "    and run \"ug gen\" before relying on them.");
+    }
+    if let Some(res) = &r.call_resolution {
+        let drawn = res.resolved_qualified
+            + res.resolved_path_suffix
+            + res.resolved_typed
+            + res.resolved_by_name;
+        let seen = drawn + res.dropped_unresolved;
+        if seen > 0 {
+            line(
+                &mut out,
+                &format!(
+                    "  • Call resolution: {} of {} call sites became edges ({} exact path, {} path suffix,",
+                    drawn, seen, res.resolved_qualified, res.resolved_path_suffix
+                ),
+            );
+            line(
+                &mut out,
+                &format!(
+                    "    {} by receiver type, {} by name); {} drew none. Most drops are calls into the",
+                    res.resolved_typed, res.resolved_by_name, res.dropped_unresolved
+                ),
+            );
+            line(
+                &mut out,
+                "    standard library or a dependency, but an ambiguous in-repo name lands there too —",
+            );
+            line(
+                &mut out,
+                "    so an empty find_usages means \"no edge was drawn\", not always \"nothing calls it\".",
+            );
+        }
     }
     out
 }

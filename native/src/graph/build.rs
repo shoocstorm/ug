@@ -75,6 +75,25 @@ struct QualifiedIndex {
     /// it (a Java call site names a member and a receiver, never a path),
     /// which is why the tables below came first.
     by_qualified: HashMap<String, String>,
+    /// Every 2-or-more-segment *suffix* of every qualified name -> the ids
+    /// carrying it.
+    ///
+    /// The exact map above assumes both sides of a call spell the path the
+    /// same way. Within one crate they do not: a symbol declares itself
+    /// `crate::cli::run`, while a call site that went through the crate's
+    /// public name writes `ultragraph::cli::run`. Same function, no string
+    /// match — so `main`'s one call landed in `dropped_unresolved`, and with
+    /// it every path from the binary's entry point into the library.
+    ///
+    /// Matching on a shared suffix closes that without guessing: `cli::run`
+    /// identifies exactly one symbol here, so the rewrite is forced rather
+    /// than chosen. The two-segment floor is what keeps it honest — a
+    /// one-segment "suffix" is the bare name, which is the ambiguous lookup
+    /// [`pick_best`] already exists to refuse.
+    ///
+    /// Suffixes are stored joined with the declaring language's own
+    /// separator, so a Rust `a::b` can never collide with a Python `a.b`.
+    by_suffix: HashMap<String, Vec<String>>,
     /// `pkg.Type#member` -> candidate node ids, each with its parameter
     /// count so overloads can be told apart.
     members: HashMap<String, Vec<(String, u32)>>,
@@ -92,6 +111,41 @@ struct QualifiedIndex {
 }
 
 impl QualifiedIndex {
+    /// Register every 2-or-more-segment suffix of `fqn` against `id`.
+    ///
+    /// See [`Self::by_suffix`] for why. The full name is registered too: a
+    /// call may spell the whole path when the declaration omits a root the
+    /// caller supplies, and skipping it would miss that case for no saving.
+    fn register_suffixes(&mut self, fqn: &str, id: &str, sep: &str) {
+        for suffix in path_suffixes(fqn, sep) {
+            self.by_suffix
+                .entry(suffix.to_string())
+                .or_default()
+                .push(id.to_string());
+        }
+    }
+
+    /// The one symbol whose qualified name ends the way `fqn` does, or
+    /// `None` when zero or several do.
+    ///
+    /// Tried longest-first, so the most specific agreement wins: a call to
+    /// `a::b::c::run` prefers a symbol ending `b::c::run` over one that only
+    /// agrees on `c::run`. Ambiguity resolves to nothing rather than to a
+    /// guess, for the reason [`pick_best`] documents at length.
+    fn by_path_suffix(&self, fqn: &str, sep: &str) -> Option<&String> {
+        for suffix in path_suffixes(fqn, sep) {
+            if let Some(ids) = self.by_suffix.get(suffix) {
+                if ids.len() == 1 {
+                    return ids.first();
+                }
+                // Ambiguous at this length; a longer suffix was already
+                // tried and a shorter one is only more ambiguous.
+                return None;
+            }
+        }
+        None
+    }
+
     /// Node id for `owner#member` taking `argc` arguments, searching the
     /// owner first and then up its supertypes.
     ///
@@ -254,6 +308,7 @@ pub fn build_graph_from_index(index_result: &crate::types::IndexResult) -> Graph
     add_file_and_symbol_nodes(index_result, &mut acc);
     resolve_call_edges(index_result, &mut acc);
     resolve_import_edges(index_result, &files, &dependency_ids, &mut acc);
+    apply_dispatch_bindings(index_result, &mut acc);
 
     dedupe_edges(&mut acc.edges.edges);
 
@@ -538,6 +593,11 @@ fn add_file_and_symbol_nodes(index_result: &crate::types::IndexResult, acc: &mut
                     .by_qualified
                     .entry(fqn.clone())
                     .or_insert_with(|| sym_node_id.clone());
+                qualified.register_suffixes(
+                    fqn,
+                    &sym_node_id,
+                    crate::indexer::scope::module_sep(&file.language),
+                );
 
                 match &sym.owner {
                     // A member: `pkg.Type#name`, keyed with its arity.
@@ -743,7 +803,19 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
             // the only thing standing between a registered handler and the
             // `dead_code` query.
             for referenced in &sym.value_refs {
-                let Some(target_id) = qualified.by_qualified.get(referenced) else {
+                // Same two-spellings problem the call ladder has: the
+                // reference may be written against the crate's public name
+                // while the declaration says `crate::`. Both are paths, so
+                // both are checked as paths — deliberately not by bare name,
+                // which would let a loop variable named `call` reference
+                // whatever function in the repo happens to be called `call`.
+                let sep = crate::indexer::scope::module_sep(&file.language);
+                let Some(target_id) = qualified
+                    .by_qualified
+                    .get(referenced)
+                    .or_else(|| qualified.by_path_suffix(referenced, sep))
+                    .cloned()
+                else {
                     continue;
                 };
                 edges.add(&sym_node_id, &target_id, GraphEdgeType::References);
@@ -776,9 +848,21 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                     // only on `.`, so every `a::b::c(..)` in a Rust file
                     // failed both its lookups and produced no edge at all.
                     if let Some(fqn) = &call.qualified {
+                        let sep = crate::indexer::scope::module_sep(&file.language);
                         if let Some(target_id) = qualified.by_qualified.get(fqn) {
                             edges.add(&sym_node_id, &target_id, edge_for_call(call));
                             resolution.resolved_qualified += 1;
+                            resolved = true;
+                        } else if let Some(target_id) = qualified.by_path_suffix(fqn, sep) {
+                            // The two spellings of one path — `crate::cli::run`
+                            // declared, `ultragraph::cli::run` called. Counted
+                            // apart from the exact hits because it is the
+                            // weaker evidence, and because watching this
+                            // bucket is how you tell a crate-name mismatch
+                            // from a genuinely absent callee.
+                            let target_id = target_id.clone();
+                            edges.add(&sym_node_id, &target_id, edge_for_call(call));
+                            resolution.resolved_path_suffix += 1;
                             resolved = true;
                         }
                     }
@@ -838,6 +922,157 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                         resolution.dropped_unresolved += 1;
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Pass 6 — move each route table's rows onto the handlers they name.
+///
+/// The router file knows `POST /api/generate`; `api_generate` knows it is a
+/// function. Neither knows the other, and until the two are joined the
+/// repo's whole HTTP surface is invisible: `boundary_census` reported zero
+/// inbound endpoints for a server with 45 routes, so every boundary question
+/// answered about nothing.
+///
+/// Runs last because it needs the symbol tables that pass 3 fills, and
+/// writes onto nodes rather than emitting edges — the route is a property of
+/// the handler, not a relationship between it and the router.
+fn apply_dispatch_bindings(index_result: &crate::types::IndexResult, acc: &mut GraphAccum) {
+    let GraphAccum { nodes, symbol_id_map, qualified, .. } = acc;
+
+    // Handler id -> (kind, protocol) -> the surfaces registered for it, in
+    // table order. A handler registered twice (`/api/x` and a legacy alias,
+    // or `list` and its `ls` shorthand) carries both.
+    let mut found: HashMap<String, HashMap<(String, String), Vec<String>>> = HashMap::new();
+
+    for file in &index_result.files {
+        if file.dispatch_bindings.is_empty() {
+            continue;
+        }
+        let normalized = normalize_path(&file.path);
+        let sep = crate::indexer::scope::module_sep(&file.language);
+        for binding in &file.dispatch_bindings {
+            // Same ladder as a value reference, and for the same reason: the
+            // handler may be named through a glob import, a module path, or
+            // bare.
+            let target = qualified
+                .by_qualified
+                .get(&binding.handler)
+                .or_else(|| qualified.by_path_suffix(&binding.handler, sep))
+                .cloned()
+                .or_else(|| resolve_symbol(symbol_id_map, &binding.handler, &normalized));
+            let Some(target) = target else { continue };
+            let surfaces = found
+                .entry(target)
+                .or_default()
+                .entry((binding.kind.clone(), binding.protocol.clone()))
+                .or_default();
+            if !surfaces.contains(&binding.surface) {
+                surfaces.push(binding.surface.clone());
+            }
+        }
+    }
+
+    if found.is_empty() {
+        return;
+    }
+
+    // Commands, by the word a user — or a `Command::new(..).arg("gen")` —
+    // types. Cloned rather than borrowed because the tagging loop below
+    // needs `found` and the subprocess pass needs this outlive it.
+    let commands: HashMap<String, String> = found
+        .iter()
+        .flat_map(|(id, by_kind)| {
+            by_kind
+                .iter()
+                .filter(|((kind, _), _)| kind == "cli.command")
+                .flat_map(move |(_, surfaces)| {
+                    surfaces.iter().map(move |s| (s.clone(), id.clone()))
+                })
+        })
+        .collect();
+
+    for node in nodes.iter_mut() {
+        let Some(by_kind) = found.get(&node.id) else {
+            continue;
+        };
+        for ((kind, protocol), surfaces) in by_kind {
+            // `route` is the single-value field the pre-existing
+            // `Match::HasRoute` rule and the `route` graph property both
+            // read; the boundary detail carries the full list.
+            if kind == "http.endpoint" && node.route.as_deref().unwrap_or("").is_empty() {
+                node.route = surfaces.first().cloned();
+            }
+            let detail = surfaces.join(",");
+            // An annotation-driven rule may have tagged this handler
+            // already. Don't double-tag; the table read here names the
+            // surface, which the rule could not, so it replaces the detail
+            // rather than appending a second boundary of the same kind.
+            if let Some(existing) = node.boundaries.iter_mut().find(|b| b.kind == *kind) {
+                existing.detail = Some(detail);
+                continue;
+            }
+            node.boundaries.push(crate::types::Boundary {
+                kind: kind.clone(),
+                direction: crate::types::BoundaryDirection::Inbound,
+                protocol: protocol.clone(),
+                detail: Some(detail),
+                source: "dispatch.table".to_string(),
+            });
+        }
+    }
+
+    link_subprocess_calls(index_result, &commands, acc);
+}
+
+/// Draw an edge from a symbol that shells out to its own binary to the
+/// subcommand it runs.
+///
+/// `POST /api/generate` spawns `current_exe gen -i <path>`. That is a real
+/// dependency — change what `ug gen` does and the endpoint changes with it —
+/// and no call-graph edge will ever find it, because there is no call: the
+/// two halves are joined by an argv string at runtime. Blast radius stops
+/// dead at the process boundary without this, which for a server that drives
+/// its own CLI means stopping before the part that does the work.
+///
+/// Recognising it needs both halves: a `Command::new(..)` in the same
+/// function, and an `.arg("<word>")` whose word is a command this repo
+/// dispatches. Either alone is too common to trust.
+fn link_subprocess_calls(
+    index_result: &crate::types::IndexResult,
+    commands: &HashMap<String, String>,
+    acc: &mut GraphAccum,
+) {
+    if commands.is_empty() {
+        return;
+    }
+    let GraphAccum { edges, .. } = acc;
+
+    for file in &index_result.files {
+        let normalized_file_path = normalize_path(&file.path);
+        let ids = symbol_node_ids(file, &normalized_file_path);
+        for (sym, sym_node_id) in file.symbols.iter().zip(ids) {
+            let spawns = sym.call_refs.iter().any(|c| {
+                c.name == "new"
+                    && c.owner_type
+                        .as_deref()
+                        .is_some_and(|o| o.rsplit(['.', ':']).next() == Some("Command"))
+            });
+            if !spawns {
+                continue;
+            }
+            for call in &sym.call_refs {
+                if call.name != "arg" {
+                    continue;
+                }
+                let Some(word) = call.first_string_arg.as_deref() else {
+                    continue;
+                };
+                let Some(target) = commands.get(word) else {
+                    continue;
+                };
+                edges.add(&sym_node_id, target, GraphEdgeType::Calls);
             }
         }
     }
@@ -1222,6 +1457,27 @@ fn dependency_root(spec: &str) -> &str {
         .min()
         .unwrap_or(spec.len());
     &spec[..end]
+}
+
+/// Every suffix of `fqn` that still names at least two segments, longest
+/// first and including `fqn` itself.
+///
+/// `crate::cli::run` yields `crate::cli::run`, then `cli::run`, and stops:
+/// `run` alone is a bare name, and matching those repo-wide is the guess
+/// this whole path exists to avoid.
+fn path_suffixes<'a>(fqn: &'a str, sep: &str) -> impl Iterator<Item = &'a str> {
+    let mut rest = Some(fqn);
+    let sep = sep.to_string();
+    std::iter::from_fn(move || {
+        let current = rest?;
+        // Stop once what is left is a single segment.
+        if !current.contains(&sep) {
+            rest = None;
+            return None;
+        }
+        rest = current.split_once(&sep).map(|(_, tail)| tail);
+        Some(current)
+    })
 }
 
 /// Which edge a resolved call site produces.

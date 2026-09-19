@@ -24,6 +24,15 @@ pub struct ShortestPathResult {
     pub length: Option<u32>,
     pub path: Vec<String>,
     pub nodes: Vec<SymbolRef>,
+    /// Call sites the graph build could not turn into edges, when that
+    /// number is large enough to be the likelier explanation for a dead end
+    /// than a genuine absence of any path.
+    ///
+    /// "No path between `main` and anything in this crate" is almost never
+    /// a fact about the code; it is a fact about resolution. Saying so turns
+    /// a confident wrong answer into a lead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unresolved_call_sites: Option<u32>,
 }
 
 /// Shortest directed path between two node ids.
@@ -67,6 +76,12 @@ pub fn shortest_path(
             .filter_map(|id| by_id.get(id.as_str()).map(|n| SymbolRef::from_node(n)))
             .collect(),
         path: result.path,
+        // Only when there is no path to report: on a hit the number is
+        // noise, and the answer stands on its own.
+        unresolved_call_sites: (!result.found)
+            .then(|| graph.resolution.as_ref().map(|r| r.dropped_unresolved))
+            .flatten()
+            .filter(|n| *n > 0),
     }
 }
 
@@ -95,6 +110,18 @@ pub fn render_shortest_path(r: &ShortestPathResult, style: Render, strict: bool)
                 style.id("traverse <symbol> -d both")
             ),
         );
+        if let Some(dropped) = r.unresolved_call_sites {
+            line(
+                &mut out,
+                &format!(
+                    "Or the edge simply was not drawn: {} call sites in this repo resolved to no \
+                     edge. Most are calls into dependencies, but a missing in-repo edge looks \
+                     exactly like a missing path. {} shows the breakdown.",
+                    dropped,
+                    style.id("graph_schema")
+                ),
+            );
+        }
         return out;
     }
 

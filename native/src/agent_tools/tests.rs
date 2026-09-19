@@ -1400,6 +1400,7 @@ fn renderers_never_leak_the_other_surfaces_markup() {
     let overview = project_overview(&g, repo, gp);
     let schema = graph_schema(&g, gp);
     let missing_path = ShortestPathResult {
+        unresolved_call_sites: None,
         source: "a".into(),
         target: "b".into(),
         found: false,
@@ -2730,6 +2731,48 @@ fn the_boundary_filter_keeps_only_the_systems_edges() {
     );
     let names: Vec<&str> = edges.queries[0].items.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, vec!["mid"], "only the symbol carrying a boundary");
+}
+
+/// "No matches. Try a shorter fragment" is the wrong advice when the
+/// fragment was exact and `boundary: true` is what dropped it — it sends
+/// the caller to widen the one part of the query that worked. Asking for six
+/// real function names with the boundary filter on produced six of these.
+#[test]
+fn a_name_excluded_by_a_filter_is_not_reported_as_a_missing_name() {
+    let g = users_fixture();
+    let r = find_symbols(
+        &g,
+        &FindSymbolsParams {
+            name: vec!["mid".into()],
+            boundary: true,
+            ..Default::default()
+        },
+    );
+    let q = &r.queries[0];
+    assert!(q.items.is_empty(), "the fixture's `mid` carries no boundary");
+    assert_eq!(q.excluded.boundary, 1, "the name matched and the filter removed it");
+
+    let out = render_find_symbols(&r, Render::Markdown);
+    assert!(out.contains("excluded by"), "{out}");
+    assert!(out.contains("boundary"), "{out}");
+    assert!(
+        !out.contains("shorter fragment"),
+        "must not advise widening a name that matched: {out}"
+    );
+}
+
+/// The counterpart: a name nothing answers to still gets the widen-your-query
+/// advice, which is right for that case.
+#[test]
+fn a_genuinely_absent_name_still_suggests_widening() {
+    let g = users_fixture();
+    let r = find_symbols(
+        &g,
+        &FindSymbolsParams { name: vec!["nosuchthing".into()], ..Default::default() },
+    );
+    assert!(r.queries[0].excluded.is_empty(), "nothing was filtered — nothing matched");
+    let out = render_find_symbols(&r, Render::Markdown);
+    assert!(out.contains("shorter fragment"), "{out}");
 }
 
 #[test]

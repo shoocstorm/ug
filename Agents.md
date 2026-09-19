@@ -1850,6 +1850,54 @@ Where things go:
 Prefer the shared helper over the comment: §9c shipped five times because the
 fix sat in one caller instead of the path every caller goes through.
 
+### 11a. ug's own answers about ug were wrong in three ways worth remembering
+
+Found by asking ug a question about ug — "which boundaries depend on
+`index_with_cache`" — and having to finish the answer with grep.
+
+**A caveat that fires on correct input is worse than no caveat.**
+`boundary_impact index_with_cache` reported `TARGET NOT INDEXED: a typo, or
+never ingested` while the function sat in the index. The probe behind that
+message only ever asked `n.file = $target`, so every *symbol* passed to a
+`TARGET` preset was called a typo. The tool's own docs tell callers to trust
+that warning absolutely, which is exactly why it has to be true: a warning
+that cries wolf on a valid input costs more than the missing feature did.
+The fix is two-part and both parts matter — resolve a symbol target to its
+file so the question gets answered, *and* say the substitution happened, so
+nobody reads a file-level number as a symbol-level one.
+
+**A blast radius that stops at the process boundary stops before the work.**
+`POST /api/generate` spawns `current_exe gen -i <path>`. That is a real
+dependency on `ug gen` and no call-graph edge will ever find it, because
+there is no call. Same for the two spellings of one path: a binary writes
+`ultragraph::cli::run`, the library declares `crate::cli::run`, the exact
+lookup misses, and `main` ends up with no outbound edges at all — every
+reachability answer then truncates at the entry point without saying so.
+Whenever an edge is *not* drawn, ask whether the two halves are joined by
+something other than a call: an argv string, a route table, a match arm.
+
+**Detection tuned to frameworks misses hand-rolled code entirely.** The Rust
+boundary rules were `fn main` and clap's `#[command]`. This repo hand-rolls
+its dispatch and uses axum's builder, so its 45 routes and 40 subcommands
+were invisible, and `boundary_census` reported 3 inbound surfaces for a
+server. `coverage: boundary_kinds 1%` was the only hint, and it was right.
+Read the coverage line before trusting a boundary answer; a preset filtering
+on a property 1% of nodes carry is answering about almost nothing.
+
+Two precision rules fell out of fixing the last one, and both are load-bearing:
+
+- **Match the path, never the bare name, when resolving a reference.**
+  Bare-name matching for glob-imported handlers pointed a graph-builder loop
+  variable called `call` at an unrelated test helper of the same name. Offer
+  one candidate *path* per glob import instead and let the symbol table
+  reject the wrong ones. (`resolve_path` does not fail on an unbound name —
+  it re-roots it under the current module — so emit both spellings.)
+- **A dispatch table's scrutinee must be a value someone was handed.**
+  `match cmd` is a CLI; `match node.kind()` is a parser, and tagging its arms
+  put `call_expression` in the repo's list of subcommands. Likewise a call
+  inside a closure (`.map(|p| get_code_source_ids(p))`) is not what the arm
+  dispatches to.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
