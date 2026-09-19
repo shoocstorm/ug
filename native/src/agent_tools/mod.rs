@@ -567,6 +567,95 @@ impl SymbolRef {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Budgeting
+// ---------------------------------------------------------------------------
+
+/// Per-item rendering overhead: the `- Type Name  file:line` bullet, the
+/// `id:` line beneath it, and the indentation around the `why` line.
+///
+/// Shared rather than per-tool because it is the cost of
+/// [`SymbolRef::render_bullet`], which every budgeted tool emits through the
+/// same function — a private copy would drift from the renderer it exists to
+/// charge for.
+pub(crate) const ITEM_CHROME: usize = 26;
+
+/// What one item will cost the budget once rendered.
+///
+/// Counted from the [`SymbolRef`] that actually gets emitted rather than from
+/// the node, because the preview fields ride along with it — a doc preview is
+/// up to [`DOC_PREVIEW_CHARS`] per item, and fifteen dependencies' worth of it
+/// is a quarter of a default budget. Costing the node's bare name instead is
+/// how a "12000 char" result quietly returns 18000.
+pub(crate) fn item_cost(symbol: &SymbolRef, why: &str, extra: usize) -> usize {
+    ITEM_CHROME
+        + why.len()
+        + symbol.id.len()
+        + symbol.name.len()
+        + symbol.node_type.len()
+        + symbol.file.as_deref().map_or(0, str::len)
+        + symbol.doc.as_deref().map_or(0, str::len)
+        + symbol.boundary.as_deref().map_or(0, str::len)
+        + extra
+}
+
+/// Items left out of a budgeted result, per role — because the budget ran out
+/// or the per-role cap was hit. Not distinguished, because the caller's move
+/// is the same either way: raise `max_chars`, or narrow `include` and ask
+/// again.
+///
+/// Every budgeted tool returns these. A cap that silently shrinks a result is
+/// the failure this type exists to prevent: the count of what was cut is part
+/// of the answer, not diagnostics.
+#[derive(Debug, Clone, Serialize)]
+pub struct DroppedRole {
+    pub role: &'static str,
+    pub count: usize,
+}
+
+/// `skip_serializing_if` for counts whose zero carries no information.
+pub(crate) fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// Running character budget for one assembled result.
+pub(crate) struct Budget {
+    max: usize,
+    used: usize,
+}
+
+impl Budget {
+    /// `reserve` is the rendering overhead this tool pays regardless of
+    /// contents — its header, section rules and trailing hint. Charged up
+    /// front rather than ignored, because `max_chars` has to bound what the
+    /// caller actually receives: counting only the payload made a 500-char
+    /// pack return 894, a 79% overshoot, worst exactly when the caller is
+    /// being careful about tokens.
+    ///
+    /// Each tool passes its own figure. The reserve is a property of a
+    /// particular renderer, so a shared constant would be a number that is
+    /// right for one caller and quietly wrong for the next.
+    pub(crate) fn new(max: usize, reserve: usize) -> Self {
+        Budget { max, used: reserve.min(max) }
+    }
+
+    pub(crate) fn left(&self) -> usize {
+        self.max.saturating_sub(self.used)
+    }
+
+    /// Characters spent so far, chrome included.
+    pub(crate) fn used(&self) -> usize {
+        self.used
+    }
+
+    /// Spend up to `want`, returning what was actually granted.
+    pub(crate) fn take(&mut self, want: usize) -> usize {
+        let granted = want.min(self.left());
+        self.used += granted;
+        granted
+    }
+}
+
 /// Standard "what to call next" footer, as `(command, why)` pairs. Agents
 /// lean on these hints, so they live with the tool rather than being
 /// re-invented in each transport. The command is styled per surface — cyan

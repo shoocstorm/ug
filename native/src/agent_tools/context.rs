@@ -45,18 +45,9 @@ const CONTEXT_DOCS_CAP: usize = 5;
 const CONTEXT_DOC_PREVIEW_CHARS: usize = 400;
 
 /// Rendering overhead every pack pays regardless of contents: the header, the
-/// id line, the budget line, the section rules and the trailing hint.
-///
-/// Charged to the budget up front rather than ignored, because `max_chars`
-/// has to bound what the caller actually receives. Counting only the payload
-/// made a 500-char pack return 894 — a 79% overshoot, worst exactly when the
-/// caller is being careful about tokens.
+/// id line, the budget line, the section rules and the trailing hint. See
+/// [`Budget::new`] for why it is charged up front.
 const CONTEXT_CHROME_RESERVE: usize = 260;
-
-/// Per-item rendering overhead: the `- Type Name  file:line` bullet, the
-/// `id:` line beneath it, and the indentation around the `why` and call-site
-/// lines.
-const CONTEXT_ITEM_CHROME: usize = 26;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextItem {
@@ -82,38 +73,6 @@ pub struct ContextItem {
     pub truncated_chars: usize,
 }
 
-fn is_zero(n: &usize) -> bool {
-    *n == 0
-}
-
-/// Items left out, per role — because the budget ran out or the per-role cap
-/// was hit. Not distinguished, because the caller's move is the same either
-/// way: raise `max_chars`, or narrow `include` and ask again.
-#[derive(Debug, Clone, Serialize)]
-pub struct ContextDropped {
-    pub role: &'static str,
-    pub count: usize,
-}
-
-/// What one item will cost the budget once rendered.
-///
-/// Counted from the [`SymbolRef`] that actually gets emitted rather than from
-/// the node, because the preview fields ride along with it — a doc preview is
-/// up to [`DOC_PREVIEW_CHARS`] per item, and 15 dependencies' worth of it is a
-/// quarter of the default budget. Costing the node's bare name instead is how
-/// a "12000 char" pack quietly returns 18000.
-fn context_item_cost(symbol: &SymbolRef, why: &str, extra: usize) -> usize {
-    CONTEXT_ITEM_CHROME
-        + why.len()
-        + symbol.id.len()
-        + symbol.name.len()
-        + symbol.node_type.len()
-        + symbol.file.as_deref().map_or(0, str::len)
-        + symbol.doc.as_deref().map_or(0, str::len)
-        + symbol.boundary.as_deref().map_or(0, str::len)
-        + extra
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextResult {
     /// The reference as the caller wrote it.
@@ -133,7 +92,7 @@ pub struct ContextResult {
     /// guarantee.
     pub used_chars: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub dropped: Vec<ContextDropped>,
+    pub dropped: Vec<DroppedRole>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,25 +119,6 @@ impl ContextResult {
 
     fn count(&self, role: &str) -> usize {
         self.items.iter().filter(|i| i.role == role).count()
-    }
-}
-
-/// Running character budget for one pack.
-struct ContextBudget {
-    max: usize,
-    used: usize,
-}
-
-impl ContextBudget {
-    fn left(&self) -> usize {
-        self.max.saturating_sub(self.used)
-    }
-
-    /// Spend up to `want`, returning what was actually granted.
-    fn take(&mut self, want: usize) -> usize {
-        let granted = want.min(self.left());
-        self.used += granted;
-        granted
     }
 }
 
@@ -277,10 +217,7 @@ pub fn context(graph: &GraphData, src: SourceCtx, p: &ContextParams) -> ContextR
     // Seeded with the chrome rather than deducted from `max`, so `used_chars`
     // reports what the caller will actually receive and can be compared
     // directly against the `max_chars` they asked for.
-    let mut budget = ContextBudget {
-        max: max_chars,
-        used: CONTEXT_CHROME_RESERVE.min(max_chars),
-    };
+    let mut budget = Budget::new(max_chars, CONTEXT_CHROME_RESERVE);
     let mut dropped: Vec<(&'static str, usize)> = Vec::new();
 
     // ── target ─────────────────────────────────────────────────────────
@@ -322,7 +259,7 @@ pub fn context(graph: &GraphData, src: SourceCtx, p: &ContextParams) -> ContextR
             if let Some(doc) = slice.doc.filter(|d| !d.trim().is_empty()) {
                 symbol.doc = Some(doc);
             }
-            budget.take(context_item_cost(&symbol, &why, code.len()));
+            budget.take(item_cost(&symbol, &why, code.len()));
             out.items.push(ContextItem {
                 role: "target",
                 why,
@@ -387,7 +324,7 @@ pub fn context(graph: &GraphData, src: SourceCtx, p: &ContextParams) -> ContextR
                     (true, d) => format!("test, reaches target in {} hops", d),
                     (false, _) => format!("this —{}→ target", user.via_edge),
                 };
-                let cost = context_item_cost(
+                let cost = item_cost(
                     &user.symbol,
                     &why,
                     user.call_sites.iter().map(|c| c.text.len() + 8).sum(),
@@ -451,7 +388,7 @@ pub fn context(graph: &GraphData, src: SourceCtx, p: &ContextParams) -> ContextR
             for (i, (node, et)) in deps.iter().enumerate() {
                 let why = format!("target —{}→ this", et);
                 let symbol = SymbolRef::from_node(node);
-                let cost = context_item_cost(&symbol, &why, 0);
+                let cost = item_cost(&symbol, &why, 0);
                 if i >= CONTEXT_DEPS_CAP || budget.left() < cost {
                     dropped.push(("dependency", deps.len() - i));
                     break;
@@ -479,7 +416,7 @@ pub fn context(graph: &GraphData, src: SourceCtx, p: &ContextParams) -> ContextR
                     .collect();
                 let why = "prose the indexer linked to this symbol".to_string();
                 let symbol = SymbolRef::from_node(node);
-                let cost = context_item_cost(&symbol, &why, prose.len());
+                let cost = item_cost(&symbol, &why, prose.len());
                 if i >= CONTEXT_DOCS_CAP || budget.left() < cost {
                     dropped.push(("doc", docs.len() - i));
                     break;
@@ -502,10 +439,10 @@ pub fn context(graph: &GraphData, src: SourceCtx, p: &ContextParams) -> ContextR
     for role in CONTEXT_ROLES {
         let count: usize = dropped.iter().filter(|(r, _)| r == role).map(|(_, c)| c).sum();
         if count > 0 {
-            out.dropped.push(ContextDropped { role, count });
+            out.dropped.push(DroppedRole { role, count });
         }
     }
-    out.used_chars = budget.used;
+    out.used_chars = budget.used();
     out
 }
 
