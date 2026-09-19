@@ -39,8 +39,7 @@ fn edge(source: &str, target: &str, edge_type: GraphEdgeType) -> GraphEdge {
 }
 
 /// Two functions in one file, `caller` calling `callee`, plus the File
-/// node that contains them. The File node carries no line range, like a
-/// real one.
+/// node that contains them.
 fn fixture() -> GraphData {
     GraphData {
         nodes: vec![
@@ -1051,11 +1050,11 @@ fn overlapping_refs_do_not_repeat_a_node_id() {
 /// `*` in a path must not cross `/`, or every "this directory" query
 /// silently becomes a whole-subtree query.
 #[test]
-fn file_outline_glob_expands_to_every_matching_file() {
+fn file_context_glob_expands_to_every_matching_file() {
     let g = glob_fixture();
-    let r = file_outline(
+    let r = file_context(
         &g,
-        &FileOutlineParams {
+        &FileContextParams {
             file: vec!["src/*.rs".into()],
             ..Default::default()
         },
@@ -1064,9 +1063,9 @@ fn file_outline_glob_expands_to_every_matching_file() {
     assert_eq!(r.files.len(), 1);
     assert_eq!(r.files[0].file.as_deref(), Some("src/a.rs"));
 
-    let deep = file_outline(
+    let deep = file_context(
         &g,
-        &FileOutlineParams {
+        &FileContextParams {
             file: vec!["src/**/*.rs".into()],
             ..Default::default()
         },
@@ -1079,11 +1078,11 @@ fn file_outline_glob_expands_to_every_matching_file() {
 /// truncated answer that does not say so is the failure mode worth
 /// testing for.
 #[test]
-fn file_outline_glob_reports_the_files_it_did_not_expand() {
+fn file_context_glob_reports_the_files_it_did_not_expand() {
     let g = glob_fixture();
-    let r = file_outline(
+    let r = file_context(
         &g,
-        &FileOutlineParams {
+        &FileContextParams {
             file: vec!["src/**/*.rs".into()],
             max_files: Some(1),
             ..Default::default()
@@ -1097,11 +1096,11 @@ fn file_outline_glob_reports_the_files_it_did_not_expand() {
 }
 
 #[test]
-fn file_outline_glob_matching_nothing_explains_itself() {
+fn file_context_glob_matching_nothing_explains_itself() {
     let g = glob_fixture();
-    let r = file_outline(
+    let r = file_context(
         &g,
-        &FileOutlineParams {
+        &FileContextParams {
             file: vec!["src/*.ts".into()],
             ..Default::default()
         },
@@ -1182,11 +1181,11 @@ fn unresolved_refs_are_diagnosed_by_shape() {
 }
 
 #[test]
-fn file_outline_resolves_suffix_and_orders_by_line() {
+fn file_context_resolves_suffix_and_orders_by_line() {
     let g = fixture();
-    let r = file_outline(
+    let r = file_context(
         &g,
-        &FileOutlineParams {
+        &FileContextParams {
             file: vec!["a.rs".into()],
             ..Default::default()
         },
@@ -1195,23 +1194,37 @@ fn file_outline_resolves_suffix_and_orders_by_line() {
     let entry = &r.files[0];
     assert_eq!(entry.file.as_deref(), Some("src/a.rs"));
     // File/Folder nodes are excluded; symbols come back in line order.
-    assert_eq!(entry.symbols.len(), 2);
-    assert_eq!(entry.symbols[0].name, "caller");
-    assert_eq!(entry.symbols[1].name, "callee");
+    let outline: Vec<&str> = entry
+        .items
+        .iter()
+        .filter(|i| i.role == "outline")
+        .map(|i| i.symbol.name.as_str())
+        .collect();
+    assert_eq!(outline, vec!["caller", "callee"]);
+    assert_eq!(entry.facts.as_ref().unwrap().symbols, 2);
 }
 
+/// A symbol id reports the file that holds it rather than erroring. An agent
+/// holding an id and wanting its file should not have to look the path up
+/// first — the same coercion `analyze` applies to a non-path `target`.
 #[test]
-fn file_outline_rejects_non_file_node_id() {
+fn file_context_resolves_a_symbol_id_to_its_file() {
     let g = fixture();
-    let r = file_outline(
+    let r = file_context(
         &g,
-        &FileOutlineParams {
+        &FileContextParams {
             node_id: vec!["function:src/a.rs:1:caller".into()],
             ..Default::default()
         },
     );
-    assert!(!r.ok());
-    assert!(r.files[0].error.as_ref().unwrap().contains("not a File"));
+    assert!(r.ok());
+    assert_eq!(r.files[0].file.as_deref(), Some("src/a.rs"));
+    // And it says so, rather than silently answering a different question.
+    assert!(
+        r.notes.iter().any(|n| n.contains("the file that holds it")),
+        "notes: {:?}",
+        r.notes
+    );
 }
 
 #[test]
@@ -1379,9 +1392,9 @@ fn renderers_never_leak_the_other_surfaces_markup() {
             ..Default::default()
         },
     );
-    let outline = file_outline(
+    let outline = file_context(
         &g,
-        &FileOutlineParams {
+        &FileContextParams {
             file: vec!["a.rs".into(), "missing.rs".into()],
             ..Default::default()
         },
@@ -1412,7 +1425,7 @@ fn renderers_never_leak_the_other_surfaces_markup() {
 
     let cases: Vec<(&str, Box<dyn Fn(Render) -> String>)> = vec![
         ("find_symbols", Box::new(move |s| render_find_symbols(&symbols, s))),
-        ("file_outline", Box::new(move |s| render_file_outline(&outline, s))),
+        ("file_context", Box::new(move |s| render_file_context(&outline, s))),
         ("find_usages", Box::new(move |s| render_find_usages(&usages, s))),
         (
             "project_overview",
@@ -2626,14 +2639,287 @@ fn the_language_breakdown_comes_from_the_shallowest_folder() {
     assert_eq!(r.kb_type.as_deref(), Some("source"));
 }
 
-// ── file_outline ────────────────────────────────────────────────────────────
+// ── file_context ────────────────────────────────────────────────────────────
+
+/// A file with a neighbour of every kind: one that imports it, one it
+/// imports, a third-party dependency, a test that reaches into it, a
+/// dependent that reaches into it *without* importing the file, and folder
+/// siblings.
+///
+/// `lonely.rs` is the point of the fixture. It calls a symbol in `svc.rs` but
+/// draws no edge to the File node, so it can only be found by walking inbound
+/// from the file's symbols — which is the one thing an implementation built on
+/// the File node's own `in_degree` would get wrong while looking right.
+fn file_context_fixture() -> GraphData {
+    use crate::types::FileClassification;
+
+    let mut test_fn = node(
+        "function:src/svc_test.rs:1:test_handle",
+        "test_handle",
+        GraphNodeType::Function,
+        "src/svc_test.rs",
+        Some((1, 8)),
+    );
+    test_fn.classification = Some(FileClassification::Test);
+
+    let mut subject = node(
+        "file:src/svc.rs",
+        "src/svc.rs",
+        GraphNodeType::File,
+        "src/svc.rs",
+        Some((1, 40)),
+    );
+    subject.language = Some("rust".into());
+
+    GraphData {
+        nodes: vec![
+            subject,
+            node(
+                "function:src/svc.rs:5:handle",
+                "handle",
+                GraphNodeType::Function,
+                "src/svc.rs",
+                Some((5, 10)),
+            ),
+            node(
+                "function:src/svc.rs:12:helper",
+                "helper",
+                GraphNodeType::Function,
+                "src/svc.rs",
+                Some((12, 20)),
+            ),
+            node("file:src/api.rs", "src/api.rs", GraphNodeType::File, "src/api.rs", Some((1, 9))),
+            node(
+                "function:src/api.rs:1:route_it",
+                "route_it",
+                GraphNodeType::Function,
+                "src/api.rs",
+                Some((1, 4)),
+            ),
+            node("file:src/util.rs", "src/util.rs", GraphNodeType::File, "src/util.rs", Some((1, 3))),
+            node("file:src/lonely.rs", "src/lonely.rs", GraphNodeType::File, "src/lonely.rs", Some((1, 6))),
+            node(
+                "function:src/lonely.rs:2:reaches_in",
+                "reaches_in",
+                GraphNodeType::Function,
+                "src/lonely.rs",
+                Some((2, 5)),
+            ),
+            node("file:src/svc_test.rs", "src/svc_test.rs", GraphNodeType::File, "src/svc_test.rs", Some((1, 9))),
+            test_fn,
+            node("dep:serde", "serde", GraphNodeType::Dependency, "", None),
+        ],
+        edges: vec![
+            edge("file:src/svc.rs", "function:src/svc.rs:5:handle", GraphEdgeType::Contains),
+            edge("file:src/svc.rs", "function:src/svc.rs:12:helper", GraphEdgeType::Contains),
+            // api.rs imports the file *and* calls into it.
+            edge("file:src/api.rs", "file:src/svc.rs", GraphEdgeType::Imports),
+            edge(
+                "function:src/api.rs:1:route_it",
+                "function:src/svc.rs:5:handle",
+                GraphEdgeType::Calls,
+            ),
+            // svc.rs reaches outward, to a file and to a package.
+            edge("file:src/svc.rs", "file:src/util.rs", GraphEdgeType::Imports),
+            edge("file:src/svc.rs", "dep:serde", GraphEdgeType::DependsOn),
+            // lonely.rs calls in with no file-level edge at all.
+            edge(
+                "function:src/lonely.rs:2:reaches_in",
+                "function:src/svc.rs:12:helper",
+                GraphEdgeType::Calls,
+            ),
+            edge(
+                "function:src/svc_test.rs:1:test_handle",
+                "function:src/svc.rs:5:handle",
+                GraphEdgeType::Calls,
+            ),
+        ],
+        stats: None,
+        resolution: None,
+    }
+}
+
+fn svc_context(p: &FileContextParams) -> FileContextResult {
+    file_context(&file_context_fixture(), p)
+}
+
+fn role_names(entry: &FileContextEntry, role: &str) -> Vec<String> {
+    entry
+        .items
+        .iter()
+        .filter(|i| i.role == role)
+        .map(|i| i.symbol.name.clone())
+        .collect()
+}
+
+/// Every neighbour arrives labelled with the relationship that put it there.
+/// The label is the feature: an unlabelled bundle is a pile the caller has to
+/// re-derive.
+#[test]
+fn file_context_labels_every_neighbour_with_its_role() {
+    let r = svc_context(&FileContextParams {
+        file: vec!["src/svc.rs".into()],
+        ..Default::default()
+    });
+    assert!(r.ok(), "{:?}", r.files[0].error);
+    let e = &r.files[0];
+
+    assert_eq!(role_names(e, "outline"), vec!["handle", "helper"]);
+    assert_eq!(role_names(e, "importer"), vec!["src/api.rs"]);
+    assert_eq!(role_names(e, "import"), vec!["serde", "src/util.rs"]);
+    assert_eq!(role_names(e, "test"), vec!["src/svc_test.rs"]);
+    // The test file is NOT also a dependent: "what re-verifies this" and
+    // "what breaks if I change it" are different questions, and one node
+    // answering both would read as two dependents.
+    let dependents = role_names(e, "dependent");
+    assert!(
+        dependents.contains(&"src/api.rs".to_string())
+            && dependents.contains(&"src/lonely.rs".to_string()),
+        "{dependents:?}"
+    );
+    assert!(!dependents.contains(&"src/svc_test.rs".to_string()), "{dependents:?}");
+
+    // Facts the graph now carries about the file itself.
+    let facts = e.facts.as_ref().expect("facts");
+    assert_eq!(facts.lines, Some(40), "the File node's own span");
+    assert_eq!(facts.symbols, 2);
+    assert_eq!(facts.language.as_deref(), Some("rust"));
+    assert!(!facts.is_test);
+
+    // Every role is one the renderer knows how to head.
+    for item in &e.items {
+        assert!(
+            FILE_CONTEXT_ROLES.contains(&item.role),
+            "unknown role {}",
+            item.role
+        );
+    }
+
+    let out = render_file_context(&r, Render::Markdown);
+    for heading in [
+        "── outline (2) ──",
+        "── importers (1) ──",
+        "── tests (1) ──",
+        "── siblings (",
+    ] {
+        assert!(out.contains(heading), "missing {heading}:\n{out}");
+    }
+    assert!(out.contains("40 lines"), "{out}");
+}
+
+/// The dependent walk starts from the file's *symbols*, never its File node.
+///
+/// A File node's `in_degree` counts only file-incident edges, so a function
+/// here being called from another file contributes nothing to it. One hop from
+/// the File node is the wrong answer to "what depends on this file" and looks
+/// like the right one — `lonely.rs` is the file that catches it.
+#[test]
+fn the_blast_radius_walks_inbound_from_the_files_symbols() {
+    let r = svc_context(&FileContextParams {
+        file: vec!["src/svc.rs".into()],
+        include: vec!["dependent".into()],
+        ..Default::default()
+    });
+    let e = &r.files[0];
+    assert!(
+        role_names(e, "dependent").contains(&"src/lonely.rs".to_string()),
+        "a caller with no file-level edge must still show up: {:?}",
+        role_names(e, "dependent")
+    );
+    // And it is reported as the symbol count, not just a file name.
+    let lonely = e
+        .items
+        .iter()
+        .find(|i| i.symbol.name == "src/lonely.rs")
+        .expect("lonely");
+    assert_eq!(lonely.symbols, 1);
+    assert_eq!(lonely.examples, vec!["reaches_in".to_string()]);
+}
+
+/// Roles fill in priority order, and whatever did not fit is counted rather
+/// than silently cut.
+#[test]
+fn file_context_fills_by_priority_and_reports_what_did_not_fit() {
+    const TIGHT: usize = 600;
+    let r = svc_context(&FileContextParams {
+        file: vec!["src/svc.rs".into()],
+        max_chars: Some(TIGHT),
+        ..Default::default()
+    });
+    let e = &r.files[0];
+
+    assert!(r.used_chars <= TIGHT, "{} > {}", r.used_chars, TIGHT);
+    assert!(!role_names(e, "outline").is_empty(), "the outline survives first");
+    assert!(
+        role_names(e, "sibling").is_empty(),
+        "the lowest-priority role goes first"
+    );
+    assert!(!r.dropped.is_empty(), "and the drop is reported");
+    assert!(
+        r.dropped.iter().any(|d| d.role == "sibling"),
+        "{:?}",
+        r.dropped
+    );
+    assert!(render_file_context(&r, Render::Markdown).contains("not shown:"));
+}
+
+/// A typo'd role would otherwise silently empty the report.
+#[test]
+fn file_context_include_keeps_only_the_named_roles() {
+    let r = svc_context(&FileContextParams {
+        file: vec!["src/svc.rs".into()],
+        include: vec!["outline".into(), "test".into()],
+        ..Default::default()
+    });
+    let roles: Vec<&str> = r.files[0].items.iter().map(|i| i.role).collect();
+    assert!(roles.contains(&"outline") && roles.contains(&"test"));
+    assert!(!roles.contains(&"sibling") && !roles.contains(&"importer"), "{roles:?}");
+
+    let typo = svc_context(&FileContextParams {
+        file: vec!["src/svc.rs".into()],
+        include: vec!["importers".into()],
+        ..Default::default()
+    });
+    assert!(
+        typo.notes.iter().any(|n| n.contains("unknown role")),
+        "{:?}",
+        typo.notes
+    );
+}
+
+/// Several files get outlines only, and say so. A budget split across several
+/// neighbourhoods would thin every one of them.
+#[test]
+fn several_files_report_outlines_only_and_say_so() {
+    let r = svc_context(&FileContextParams {
+        file: vec!["src/svc.rs".into(), "src/api.rs".into()],
+        ..Default::default()
+    });
+    assert_eq!(r.files.len(), 2);
+    assert!(
+        r.notes.iter().any(|n| n.contains("outline only")),
+        "{:?}",
+        r.notes
+    );
+    for e in &r.files {
+        assert!(
+            role_names(e, "importer").is_empty() && role_names(e, "test").is_empty(),
+            "only the outline is assembled for a batch"
+        );
+    }
+}
 
 #[test]
 fn an_outline_lists_a_files_symbols_in_line_order() {
     let g = fixture();
-    let r = file_outline(&g, &FileOutlineParams { file: vec!["src/a.rs".into()], ..Default::default() });
+    let r = file_context(&g, &FileContextParams { file: vec!["src/a.rs".into()], ..Default::default() });
     assert!(r.ok(), "{:?}", r.files[0].error);
-    let names: Vec<&str> = r.files[0].symbols.iter().map(|s| s.name.as_str()).collect();
+    let names: Vec<&str> = r.files[0]
+        .items
+        .iter()
+        .filter(|i| i.role == "outline")
+        .map(|i| i.symbol.name.as_str())
+        .collect();
     assert_eq!(names, vec!["caller", "callee"], "line order, not id order");
 }
 
@@ -2641,17 +2927,17 @@ fn an_outline_lists_a_files_symbols_in_line_order() {
 fn an_outline_accepts_a_bare_basename() {
     // Typing the repo-relative path is what the suffix match exists to avoid.
     let g = fixture();
-    let r = file_outline(&g, &FileOutlineParams { file: vec!["a.rs".into()], ..Default::default() });
+    let r = file_context(&g, &FileContextParams { file: vec!["a.rs".into()], ..Default::default() });
     assert!(r.ok(), "{:?}", r.files[0].error);
-    assert_eq!(r.files[0].symbols.len(), 2);
+    assert_eq!(r.files[0].facts.as_ref().unwrap().symbols, 2);
 }
 
 #[test]
 fn an_outline_accepts_a_file_node_id() {
     let g = fixture();
-    let r = file_outline(
+    let r = file_context(
         &g,
-        &FileOutlineParams { file: vec!["file:src/a.rs".into()], ..Default::default() },
+        &FileContextParams { file: vec!["file:src/a.rs".into()], ..Default::default() },
     );
     assert!(r.ok(), "{:?}", r.files[0].error);
 }
@@ -2659,9 +2945,9 @@ fn an_outline_accepts_a_file_node_id() {
 #[test]
 fn an_outline_of_an_unknown_file_explains_itself() {
     let g = fixture();
-    let r = file_outline(
+    let r = file_context(
         &g,
-        &FileOutlineParams { file: vec!["src/nothing.rs".into()], ..Default::default() },
+        &FileContextParams { file: vec!["src/nothing.rs".into()], ..Default::default() },
     );
     assert!(!r.ok());
     assert!(r.files[0].error.is_some(), "{:?}", r.files[0]);
@@ -2670,9 +2956,9 @@ fn an_outline_of_an_unknown_file_explains_itself() {
 #[test]
 fn several_files_are_outlined_in_one_call() {
     let g = overview_fixture();
-    let r = file_outline(
+    let r = file_context(
         &g,
-        &FileOutlineParams {
+        &FileContextParams {
             file: vec!["src/a.rs".into(), "src/b.rs".into()],
             ..Default::default()
         },
@@ -2683,9 +2969,9 @@ fn several_files_are_outlined_in_one_call() {
 #[test]
 fn rendering_an_outline_names_the_file_and_its_symbols() {
     let g = fixture();
-    let r = file_outline(&g, &FileOutlineParams { file: vec!["src/a.rs".into()], ..Default::default() });
+    let r = file_context(&g, &FileContextParams { file: vec!["src/a.rs".into()], ..Default::default() });
     for style in [Render::Ansi, Render::Markdown] {
-        let out = render_file_outline(&r, style);
+        let out = render_file_context(&r, style);
         assert!(out.contains("src/a.rs"), "{out}");
         assert!(out.contains("caller") && out.contains("callee"), "{out}");
     }
@@ -2694,11 +2980,11 @@ fn rendering_an_outline_names_the_file_and_its_symbols() {
 #[test]
 fn rendering_an_outline_miss_shows_the_reason() {
     let g = fixture();
-    let r = file_outline(
+    let r = file_context(
         &g,
-        &FileOutlineParams { file: vec!["src/nothing.rs".into()], ..Default::default() },
+        &FileContextParams { file: vec!["src/nothing.rs".into()], ..Default::default() },
     );
-    let out = render_file_outline(&r, Render::Markdown);
+    let out = render_file_context(&r, Render::Markdown);
     assert!(out.contains("nothing.rs"), "{out}");
 }
 

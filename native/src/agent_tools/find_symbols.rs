@@ -156,7 +156,7 @@ pub fn find_symbols(graph: &GraphData, p: &FindSymbolsParams) -> FindSymbolsResu
                 items: vec![],
                 excluded: ExcludedByFilter::default(),
                 error: Some(format!(
-                    "No node with id '{}' — ids come from find_symbols, search or file_outline.",
+                    "No node with id '{}' — ids come from find_symbols, search or file_context.",
                     id
                 )),
             },

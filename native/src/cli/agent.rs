@@ -139,7 +139,7 @@ fn indexed_source(graph_path: &Path, ids: &[String]) -> agent_tools::IndexedSour
 ///
 /// One block in one place because the matcher is one implementation
 /// (`ultragraph::pattern`): someone who learns `*` on `find_symbols` will try
-/// it on `file_outline` and `find_usages`, and it has to be the same there.
+/// it on `file_context` and `find_usages`, and it has to be the same there.
 /// The quoting note leads because an unquoted `*` is expanded by the shell
 /// before `ug` ever sees it — the first thing that bites a new user.
 pub(crate) fn print_wildcard_help() {
@@ -260,35 +260,49 @@ fn print_find_symbols_help() {
     println!("      — those take the same names and patterns directly, too.");
 }
 
-fn print_file_outline_help() {
-    println!("  {C_CYAN}ug file_outline{C_RESET}  {C_YELLOW}— list every indexed symbol in one file{C_RESET}");
+fn print_file_context_help() {
+    println!("  {C_CYAN}ug file_context{C_RESET}  {C_YELLOW}— everything about one file, in one call{C_RESET}");
     println!("  {C_BOLD}{C_CYAN}────────────────────────────────────────────────────────{C_RESET}");
     println!();
-    println!("{C_BOLD}Usage:{C_RESET}  ug file_outline <file-or-glob-or-id>... [options]");
+    println!("{C_BOLD}Usage:{C_RESET}  ug file_context <file-or-glob-or-id>... [options]");
+    println!();
+    println!("What {C_CYAN}context{C_RESET} does for a symbol, this does for a file — the unit you are");
+    println!("actually handed by a diff, a stack trace or an {C_CYAN}@{C_RESET}-mention. One budgeted");
+    println!("report instead of an outline → {C_CYAN}find_usages{C_RESET} → {C_CYAN}traverse{C_RESET} → three {C_CYAN}analyze{C_RESET} presets.");
+    println!();
+    println!("{C_BOLD}What comes back, in budget priority order:{C_RESET}");
+    println!("  {C_BOLD}outline{C_RESET}     every symbol the file declares, in line order, with its doc clause");
+    println!("  {C_BOLD}importer{C_RESET}    files that import this one");
+    println!("  {C_BOLD}import{C_RESET}      the files and third-party packages it reaches for");
+    println!("  {C_BOLD}test{C_RESET}        test files reaching its symbols — what re-verifies it");
+    println!("  {C_BOLD}dependent{C_RESET}   non-test files reaching its symbols — the blast radius");
+    println!("  {C_BOLD}sibling{C_RESET}     what else lives in the same folder");
     println!();
     println!("{C_BOLD}Accepts, for each argument:{C_RESET}");
     println!("  a repo-relative {C_CYAN}path{C_RESET} ({C_CYAN}native/src/main.rs{C_RESET})  ·  a unique {C_CYAN}suffix{C_RESET} ({C_CYAN}main.rs{C_RESET})");
     println!("  a File node {C_CYAN}id{C_RESET} ({C_CYAN}file:native/src/main.rs{C_RESET})  ·  a path {C_CYAN}glob{C_RESET} ({C_CYAN}src/**/*.ts{C_RESET})");
-    println!("  Batch several in one call rather than running the command repeatedly.");
+    println!("  any {C_CYAN}symbol id{C_RESET} — it reports the file that holds it");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-k, --max-files <n>{C_RESET}   Files a single glob may outline (default 20). Over the cap,");
-    println!("                        the extra paths are listed by name instead of expanded.");
+    println!("  {C_CYAN}--max-chars <n>{C_RESET}       Total character budget (default 8000)");
+    println!("  {C_CYAN}--include <role>{C_RESET}      Keep only this role; repeatable");
+    println!("  {C_CYAN}-k, --max-files <n>{C_RESET}   Files a single glob may report (default 20)");
     println!("  {C_CYAN}-n, --name <project>{C_RESET}  Project name (default: cwd basename)");
-    println!("  {C_CYAN}--ids{C_RESET}                Show the full node id on each line (on by default in a");
-    println!("                        terminal; off when piped, since kind:file:name reconstructs it)");
+    println!("  {C_CYAN}--ids{C_RESET}                Show the full node id on each outline row (on by default");
+    println!("                        in a terminal; off when piped, since kind:file:name reconstructs it)");
     println!("  {C_CYAN}--json{C_RESET}               Machine-readable output");
     println!();
     print_wildcard_help();
     println!();
     println!("{C_BOLD}Examples:{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs");
-    println!("  {C_CYAN}ug file_outline{C_RESET} main.rs                   {C_YELLOW}# unique basename works too{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} main.rs serve.rs config.rs  {C_YELLOW}# batch: several files at once{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} {C_BOLD}'native/src/storage/*.rs'{C_RESET}  {C_YELLOW}# every file in one directory{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} {C_BOLD}'src/**/*.{{ts,tsx}}'{C_RESET} -k 40  {C_YELLOW}# a whole subtree, recursively{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} {C_BOLD}'**/test_*.py'{C_RESET}            {C_YELLOW}# by naming convention, anywhere{C_RESET}");
-    println!("  {C_CYAN}ug file_outline{C_RESET} native/src/main.rs --ids   {C_YELLOW}# force ids on when piped{C_RESET}");
+    println!("  {C_CYAN}ug file_context{C_RESET} native/src/main.rs        {C_YELLOW}# the whole report{C_RESET}");
+    println!("  {C_CYAN}ug file_context{C_RESET} main.rs                   {C_YELLOW}# unique basename works too{C_RESET}");
+    println!("  {C_CYAN}ug file_context{C_RESET} main.rs --include outline  {C_YELLOW}# just the table of contents{C_RESET}");
+    println!("  {C_CYAN}ug file_context{C_RESET} main.rs --include test --include dependent  {C_YELLOW}# the edit-safety half{C_RESET}");
+    println!("  {C_CYAN}ug file_context{C_RESET} {C_BOLD}'native/src/storage/*.rs'{C_RESET}  {C_YELLOW}# outline of every file in a directory{C_RESET}");
+    println!();
+    println!("{C_DIM}Several files report outlines only. A budget split across several{C_RESET}");
+    println!("{C_DIM}neighbourhoods would thin every one of them — pass one file for the rest.{C_RESET}");
 }
 
 fn print_context_help() {
@@ -453,27 +467,32 @@ fn run_find_symbols_with(args: &[String], include_docs: bool) -> CliResult {
     )
 }
 
-pub(crate) fn run_file_outline(args: &[String]) -> CliResult {
+pub(crate) fn run_file_context(args: &[String]) -> CliResult {
     if has_flag(args, "-h") || has_flag(args, "--help") {
-        print_file_outline_help();
+        print_file_context_help();
         return Ok(());
     }
     let files = positionals(args, AGENT_VALUE_FLAGS);
     if files.is_empty() {
-        return Err(CliError::usage("Usage: ug file_outline <file>... [-n|--name <project>]"));
+        return Err(CliError::usage(
+            "Usage: ug file_context <file>... [--include <role>] [--max-chars <n>] [-n|--name <project>]",
+        ));
     }
+    warn_if_shell_expanded(&files);
     let (graph, _raw, _path) = load_agent_graph(args)?;
 
-    // A `file:`-prefixed id is a File node id *and* a path — `file_outline`
-    // resolves either, so both buckets end up in the same place.
+    // A `file:`-prefixed id is a File node id *and* a path — either resolves,
+    // so both buckets end up in the same place.
     let (node_id, file) = files
         .into_iter()
         .partition(|s| looks_like_node_id(s) && !s.starts_with("file:"));
-    let mut result = agent_tools::file_outline(
+    let mut result = agent_tools::file_context(
         &graph,
-        &agent_tools::FileOutlineParams {
+        &agent_tools::FileContextParams {
             node_id,
             file,
+            max_chars: flag_value(args, &["--max-chars"]).and_then(|s| s.parse().ok()),
+            include: multi_flag(args, &["--include"]),
             max_files: flag_value(args, &["--max-files", "-k", "--limit"])
                 .and_then(|s| s.parse().ok()),
         },
@@ -485,8 +504,8 @@ pub(crate) fn run_file_outline(args: &[String]) -> CliResult {
     emit_agent_result(
         args,
         &result,
-        || agent_tools::render_file_outline(&result, Render::Ansi),
-        "file_outline result",
+        || agent_tools::render_file_context(&result, Render::Ansi),
+        "file_context result",
         ok,
     )
 }
@@ -991,7 +1010,7 @@ mod command_tests {
         let _g = project(&mut env);
 
         run_find_symbols(&args(&["--json", "-n", "p", "caller"])).expect("find_symbols");
-        run_file_outline(&args(&["--json", "-n", "p", "src/a.rs"])).expect("file_outline");
+        run_file_context(&args(&["--json", "-n", "p", "src/a.rs"])).expect("file_context");
         run_get_code(&args(&["--json", "-n", "p", "function:src/a.rs:1:caller"])).expect("get_code");
         run_find_usages(&args(&["--json", "-n", "p", "function:src/a.rs:6:callee"]))
             .expect("find_usages");
@@ -1016,7 +1035,7 @@ mod command_tests {
 
         for (label, result) in [
             ("find_symbols", run_find_symbols(&args(&["-n", "p"]))),
-            ("file_outline", run_file_outline(&args(&["-n", "p"]))),
+            ("file_context", run_file_context(&args(&["-n", "p"]))),
             ("get_code", run_get_code(&args(&["-n", "p"]))),
             ("find_usages", run_find_usages(&args(&["-n", "p"]))),
             ("context", run_context(&args(&["-n", "p"]))),
@@ -1105,7 +1124,7 @@ mod command_tests {
 
         for result in [
             run_find_symbols(&args(&["-h"])),
-            run_file_outline(&args(&["-h"])),
+            run_file_context(&args(&["-h"])),
             run_get_code(&args(&["-h"])),
             run_find_usages(&args(&["--help"])),
             run_context(&args(&["-h"])),

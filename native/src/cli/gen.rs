@@ -391,7 +391,7 @@ pub(crate) fn run_gen(args: &[String]) {
         EmbeddingsOutcome::Missing | EmbeddingsOutcome::Failed => {
             // Structural-only commands — these work without vectors.
             println!(
-                "Works now: {C_BOLD}ug find_symbols{C_RESET}, {C_BOLD}ug file_outline{C_RESET}, {C_BOLD}ug traverse{C_RESET}, {C_BOLD}ug analyze{C_RESET}."
+                "Works now: {C_BOLD}ug find_symbols{C_RESET}, {C_BOLD}ug file_context{C_RESET}, {C_BOLD}ug traverse{C_RESET}, {C_BOLD}ug analyze{C_RESET}."
             );
             // `search` is not disabled and saying so was the wrong warning:
             // it runs, it returns plausible results, and the user who was
@@ -605,7 +605,7 @@ pub(crate) fn skip_flags_help() -> String {
     line!("               No nodes, no edges, no vectors — the db is not opened.");
     line!("               Only graph.json is rebuilt.");
     line!("               {C_GREEN}Current:{C_RESET} the graph.json tools only — {C_CYAN}find_symbols{C_RESET},");
-    line!("                        {C_CYAN}file_outline{C_RESET}, {C_CYAN}get_code{C_RESET}, {C_CYAN}find_usages{C_RESET}, {C_CYAN}shortest_path{C_RESET},");
+    line!("                        {C_CYAN}file_context{C_RESET}, {C_CYAN}get_code{C_RESET}, {C_CYAN}find_usages{C_RESET}, {C_CYAN}shortest_path{C_RESET},");
     line!("                        {C_CYAN}project_overview{C_RESET}, {C_CYAN}graph_schema{C_RESET}.");
     line!("               {C_YELLOW}Behind:{C_RESET}  {C_BOLD}everything the db backs{C_RESET} — {C_CYAN}ug analyze{C_RESET} statistics and");
     line!("                        blast radius as well as {C_CYAN}search{C_RESET} / {C_CYAN}chat{C_RESET}");

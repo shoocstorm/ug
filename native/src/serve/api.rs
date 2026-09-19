@@ -54,7 +54,7 @@ pub(crate) async fn api_tools() -> Response {
             "project": "Optional `project` field targets another indexed project without changing the server's active one.",
             "wildcards": {
                 "syntax": ultragraph::pattern::SYNTAX_SUMMARY,
-                "where": "Anywhere a symbol or file is named: find_symbols.name / .node_types / .file_prefix, file_outline.file, and the node_id of get_code, find_usages, traverse and shortest_path — which also accept a plain symbol name instead of an id.",
+                "where": "Anywhere a symbol or file is named: find_symbols.name / .node_types / .file_prefix, file_context.file, and the node_id of get_code, find_usages, traverse and shortest_path — which also accept a plain symbol name instead of an id.",
                 "expansion": format!(
                     "In the id-taking tools a name or pattern expands to at most {} symbols; hitting that cap is reported in the result, never silent.",
                     ultragraph::agent_tools::MAX_REF_EXPANSION

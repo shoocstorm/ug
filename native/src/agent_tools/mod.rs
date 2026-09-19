@@ -389,7 +389,7 @@ pub fn unresolved_ref_error(graph: &GraphData, r: &str, cap: usize) -> String {
     }
     if looks_like_node_id(r) {
         return format!(
-            "No node with id '{}' — ids come from find_symbols, search or file_outline. A plain name or a wildcard ('{}*') also works here.",
+            "No node with id '{}' — ids come from find_symbols, search or file_context. A plain name or a wildcard ('{}*') also works here.",
             r, r
         );
     }
@@ -699,7 +699,7 @@ fn next_actions_styled(out: &mut String, style: Render, hints: &[(String, &str)]
 // ---------------------------------------------------------------------------
 
 mod find_symbols;
-mod file_outline;
+mod file_context;
 mod get_code;
 mod find_usages;
 mod traverse;
@@ -709,7 +709,7 @@ mod shortest_path;
 mod context;
 
 pub use find_symbols::*;
-pub use file_outline::*;
+pub use file_context::*;
 pub use get_code::*;
 pub use find_usages::*;
 pub use traverse::*;
@@ -735,7 +735,7 @@ pub const AGENT_TOOLS: &[(&str, &str)] = &[
     ("project_overview", "Orient in the codebase: stats, biggest files, most depended-upon symbols."),
     ("context", "Everything about one symbol in a budgeted bundle: code, callers, tests, deps, docs."),
     ("find_symbols", "Symbol lookup by name or wildcard — returns node ids for the other tools."),
-    ("file_outline", "Every indexed symbol in a file, in line order; takes a path glob."),
+    ("file_context", "Everything about one file in a budgeted bundle: outline, importers, tests, blast radius."),
     ("get_code", "Read source for a symbol (id, name or wildcard), or a file/line range."),
     ("find_usages", "Who uses this symbol — inbound callers/importers, with call sites."),
     ("traverse", "N-hop walk from seed symbols, filtered by edge type and direction."),
@@ -769,7 +769,7 @@ pub fn tool_example(tool: &str) -> &'static str {
         "project_overview" => r#"{}"#,
         "context" => r#"{"node_id": "run_gen", "max_chars": 12000}"#,
         "find_symbols" => r#"{"name": "handle_*", "node_types": ["Function"], "file_prefix": "src/**"}"#,
-        "file_outline" => r#"{"file": "src/**/*.ts", "max_files": 20}"#,
+        "file_context" => r#"{"file": "native/src/cli/gen.rs", "max_chars": 8000}"#,
         "get_code" => r#"{"node_id": "render_*", "max_chars": 20000}"#,
         "find_usages" => r#"{"node_id": "validate_*", "hops": 1, "edge_types": ["calls"]}"#,
         "traverse" => r#"{"node_id": ["handle_*"], "hops": 2, "direction": "inbound"}"#,
@@ -884,7 +884,11 @@ pub fn run_tool(
 
     match tool {
         "find_symbols" => out(find_symbols(graph, &decode(params)?), style, render_find_symbols),
-        "file_outline" => out(file_outline(graph, &decode(params)?), style, render_file_outline),
+        "file_context" => out(
+            file_context(graph, &decode(params)?),
+            style,
+            render_file_context,
+        ),
         "get_code" => out(
             get_code(graph, src, &decode(params)?),
             style,

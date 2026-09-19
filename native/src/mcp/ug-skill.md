@@ -54,6 +54,9 @@ after, which grep cannot. Use it on your own edits, not just unfamiliar code.
 # BEFORE touching a symbol — the whole picture in ONE call
 ug context <symbol>                            # code + callers + tests + deps + docs
 
+# Handed a FILE instead of a symbol? The same idea, one call
+ug file_context <path>                         # outline + importers + tests + blast radius
+
 # …or the individual questions, if you only need one
 ug find_usages <symbol>                        # callers, importers, call sites
 ug analyze boundary_impact --arg target=<file> # visible outside the system?
@@ -121,6 +124,40 @@ Two rules turn a loop into one call:
 > "Who calls any of the validators?" is `ug find_usages 'validate_*'` — one
 > call, not one per validator.
 
+## `ug file_context` — the same, for a file
+
+Most of the time you are handed a *file*, not a symbol: a path out of `git
+diff`, a frame in a stack trace, a file the user named. `ug file_context` is
+`ug context` for that unit — one budgeted call instead of six.
+
+```bash
+ug file_context native/src/cli/gen.rs                       # the whole report
+ug file_context gen.rs --include outline                    # just the table of contents
+ug file_context gen.rs --include test --include dependent   # the edit-safety half
+ug file_context 'native/src/storage/*.rs'                   # survey a directory
+```
+
+It returns, in budget priority order:
+
+| role | what it answers |
+|---|---|
+| `outline` | every symbol the file declares, in line order, with its doc clause |
+| `importer` | which files import this one |
+| `import` | which files and third-party packages it reaches for |
+| `test` | which test files reach its symbols — what re-verifies it |
+| `dependent` | which non-test files reach its symbols — the blast radius |
+| `sibling` | what else lives in the same folder |
+
+It accepts a path, a unique basename, a `file:` id, **or any symbol id** — given
+a symbol it reports the file holding it. Given **several** files (or a glob) it
+returns each file's outline only, because a budget split across several
+neighbourhoods would thin every one of them; `--max-chars` then applies per file.
+
+Two things it deliberately will not do. It returns **no source** — call
+`ug get_code <id>` on the ids it hands you. And its `dependent` count is
+non-test symbols within 3 hops, so run `ug analyze impact --arg target=<path>`
+when you want the unfiltered figure.
+
 ## `ug walk` — read a change, not a patch
 
 `git diff` orders by filename and stops at the file. `ug walk` maps each hunk
@@ -168,7 +205,8 @@ approximate.
 | Only have a concept, not a name | `ug search "concept"` or `ug find_symbols <word>`, feed the id in next |
 | Know the name (or fuzzy) | `ug find_symbols foo` · `ug find_symbols 'handle_*'` |
 | How does a vague concept work? | `ug search "concept" -k 8` |
-| What's in this file / subtree? | `ug file_outline path/f.rs` · `ug file_outline 'src/**/*.ts'` |
+| What's in this file, and what surrounds it? | `ug file_context path/f.rs` |
+| What's in this subtree? | `ug file_context 'src/**/*.ts'` (outlines only) |
 | Read the source | `ug get_code <symbol>` · `ug get_code -f file --range 10-60` |
 | Who calls / imports / implements this? | `ug find_usages <symbol>` |
 | What does this depend on? | `ug traverse <symbol> -k 1` (widen only if needed) |
@@ -199,7 +237,7 @@ the result: trust that line over the tally above it.
 Node ids are `kind:file:name` — **no line number**, e.g.
 `function:path/to/file.rs:symbol_name`. Anywhere an id is expected you may
 instead pass a **bare symbol name** or **wildcard**, so a `find_symbols` round
-trip is optional; `find_symbols`, `file_outline`, `get_code`, `find_usages`
+trip is optional; `find_symbols`, `file_context`, `get_code`, `find_usages`
 and `traverse` also take **several arguments in one call** — batch, don't loop:
 
 ```bash
@@ -273,7 +311,7 @@ when they hit it — narrow, don't trust a capped answer.
 ug find_symbols 'handle_*'                    # every handler
 ug find_symbols '*Controller' --node-type Class
 ug find_symbols '*' --file-prefix 'src/auth/**' -k 100   # a whole subtree
-ug file_outline 'src/**/*.{ts,tsx}' -k 40
+ug file_context 'src/**/*.{ts,tsx}' -k 40
 ug find_usages 'validate_*'                   # blast radius of a family
 ug traverse 'handle_*' -d inbound             # one merged walk
 ```
@@ -320,7 +358,7 @@ next range to ask for.
 - Aggregate over a property nothing carries → read the `coverage:` footer; treat
   `NOT INDEXED` as "about nothing".
 - `--arg target=` matches no indexed file (paths are repo-relative) →
-  confirm with `ug file_outline`.
+  confirm with `ug file_context`.
 - `-t/--edge-type` filter on a type this graph lacks → `ug graph_schema` first.
 
 Reachability presets (`impact`, `boundary_impact`, `retest_scope`,
@@ -429,7 +467,7 @@ process and answers the same tools over HTTP (`POST /api/tools/<name>`) — the
 ## Traps
 
 - `ug search` for a name you already know → `find_symbols` (no embeddings);
-  for a file's contents → `file_outline`.
+  for a file's contents → `file_context`.
 - Trusting `ug search` ranking without checking `matched_by` — `"name"` means the
   embedder was unavailable and you got a substring match, not GraphRAG.
 - Looping over a family of symbols or files → one wildcard call.

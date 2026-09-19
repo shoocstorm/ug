@@ -16,17 +16,17 @@
         },
         {
             "name": "find_symbols",
-            "summary": "Symbol lookup by name or wildcard — returns node ids for the other tools.",
+            "summary": "Symbol lookup by name or wildcard \u2014 returns node ids for the other tools.",
             "path": "/api/tools/find_symbols",
             "method": "POST",
             "example": "{\"name\": \"handle_*\", \"node_types\": [\"Function\"], \"file_prefix\": \"src/**\"}"
         },
         {
-            "name": "file_outline",
-            "summary": "Every indexed symbol in a file, in line order; takes a path glob.",
-            "path": "/api/tools/file_outline",
+            "name": "file_context",
+            "summary": "Everything about one file in a budgeted bundle: outline, importers, tests, blast radius.",
+            "path": "/api/tools/file_context",
             "method": "POST",
-            "example": "{\"file\": \"src/**/*.ts\", \"max_files\": 20}"
+            "example": "{\"file\": \"native/src/cli/gen.rs\", \"max_chars\": 8000}"
         },
         {
             "name": "get_code",
@@ -37,7 +37,7 @@
         },
         {
             "name": "find_usages",
-            "summary": "Who uses this symbol — inbound callers/importers, with call sites.",
+            "summary": "Who uses this symbol \u2014 inbound callers/importers, with call sites.",
             "path": "/api/tools/find_usages",
             "method": "POST",
             "example": "{\"node_id\": \"validate_*\", \"hops\": 1, \"edge_types\": [\"calls\"]}"
@@ -65,7 +65,7 @@
         },
         {
             "name": "analyze",
-            "summary": "Whole-repo statistics, distributions and blast radius — a named preset or a raw GQL query over the indexed store.",
+            "summary": "Whole-repo statistics, distributions and blast radius \u2014 a named preset or a raw GQL query over the indexed store.",
             "path": "/api/tools/analyze",
             "method": "POST",
             "example": "{\"preset\": \"long_functions\", \"args\": {\"min_loc\": 100}}",
@@ -76,7 +76,7 @@
     "project": "Optional `project` field targets another indexed project without changing the server's active one.",
     "wildcards": {
         "syntax": "* any run of chars, ? one char, [abc]/[a-z] a set or range, [!ab] negated, {a,b} alternatives, \\* a literal star; patterns match the whole name, and in paths * stops at / while **/ crosses directories",
-        "where": "Anywhere a symbol or file is named: find_symbols.name / .node_types / .file_prefix, file_outline.file, and the node_id of get_code, find_usages, traverse and shortest_path — which also accept a plain symbol name instead of an id.",
+        "where": "Anywhere a symbol or file is named: find_symbols.name / .node_types / .file_prefix, file_context.file, and the node_id of get_code, find_usages, traverse and shortest_path \u2014 which also accept a plain symbol name instead of an id.",
         "expansion": "In the id-taking tools a name or pattern expands to at most 25 symbols; hitting that cap is reported in the result, never silent."
     }
 }

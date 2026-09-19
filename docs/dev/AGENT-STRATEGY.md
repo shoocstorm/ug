@@ -34,7 +34,7 @@ This framing drives every recommendation below.
 ## What `ug` already does exceptionally well for agents
 
 The agent-facing surface is deliberately small: **13 MCP tools** (`search`,
-`traverse`, `find_usages`, `find_symbols`, `file_outline`,
+`traverse`, `find_usages`, `find_symbols`, `file_context`,
 `get_code`, `project_overview`, `context`, `shortest_path`, `analyze`,
 `graph_schema`, `list_projects`, `gen` — `native/src/mcp/tools.rs`), each mirrored one-for-one
 as a CLI subcommand (`native/src/cli/mod.rs::dispatch`), with the analytical
@@ -51,7 +51,7 @@ can replicate:
 3. **`analyze` presets + GQL.** One-call answers to "how many functions exceed 100 LOC and where" — replaces a loop of greps. The coverage-honesty (`NOT INDEXED` vs. a wrong zero) is exactly what an agent needs to avoid confident-but-wrong answers.
 4. **Boundary detection.** Knowing which symbols are system entry/exit points (REST handlers, queue listeners) makes impact analysis mean something *beyond the repo.*
 5. **Wildcards + batching + bare-name resolution.** Turns multi-call loops into one call (`find_usages 'validate_*'`). Token- and round-trip-efficient.
-6. **Embedder-optional design.** Nothing an agent needs for safety requires a model. The tools split across two backing stores — `find_symbols`, `file_outline`, `get_code`, `find_usages`, `project_overview`, `graph_schema` and `shortest_path` read `graph.json` directly with zero external deps; `analyze`, `traverse` and `search` read the `ugdb` store — and **neither half needs vectors**, which is exactly what makes the `--no-embed` hook path viable. An embedding failure degrades ranking, never correctness.
+6. **Embedder-optional design.** Nothing an agent needs for safety requires a model. The tools split across two backing stores — `find_symbols`, `file_context`, `get_code`, `find_usages`, `project_overview`, `graph_schema` and `shortest_path` read `graph.json` directly with zero external deps; `analyze`, `traverse` and `search` read the `ugdb` store — and **neither half needs vectors**, which is exactly what makes the `--no-embed` hook path viable. An embedding failure degrades ranking, never correctness.
 
 ---
 
@@ -80,7 +80,7 @@ Scenarios where it's **redundant or inferior**:
 
 - Agent knows the name → `find_symbols` (exact, fast, no embedder dependency)
 - Agent needs callers → `find_usages` (graph walk)
-- Agent has the file → `file_outline` / `get_code`
+- Agent has the file → `file_context` / `get_code`
 - The agent platform already has its own embeddings (Cursor, GitHub Copilot) → duplicate infrastructure
 
 **Recommendation:** Treat the structural graph + PPR as the core value prop for agents. Treat dense/semantic search as an *enhancement layer* for the ~20% exploration case — keep it, don't let it be a single point of failure (the embedder-optional design is correct), but don't over-invest here for the agent audience. The dense half is far more valuable in the **human-facing** surface (chat, tour, web UI) than in the agent-facing one.

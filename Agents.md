@@ -1898,6 +1898,44 @@ Two precision rules fell out of fixing the last one, and both are load-bearing:
   inside a closure (`.map(|p| get_code_source_ids(p))`) is not what the arm
   dispatches to.
 
+### 11b. A File node's degree does not count its symbols' edges
+
+Found while building `file_context`. The obvious implementation of "what
+depends on this file" is one inbound hop from the File node. It returns almost
+nothing, and looks right.
+
+`FactContext::new` (`native/src/storage/facts.rs`) counts only **file-incident**
+edges into a File node's `in_degree` — `Imports`, `References`, `Exports`,
+`DependsOn`. A function in the file being called from ten other files
+contributes **zero**. The file-level graph is the import graph, nothing more.
+
+**To ask anything about what reaches a file, seed the walk with the file's
+symbols, never its File node**, and group the users by their `.file`. That is
+what `impact` and `retest_scope` do in GQL (`analyze/presets.rs`), and what
+`inbound_by_file` does over `graph.json`. The fixture that catches a regression
+here is a caller with no file-level edge at all — `src/lonely.rs` in
+`file_context_fixture`.
+
+Related: a `File`→symbol `References` edge is the import relationship seen from
+the other end. Count it as a dependent and the blast radius double-counts the
+importer list you printed one section earlier, so the walk skips file-level
+nodes outright.
+
+### 11c. A per-renderer constant is not a shared constant
+
+`context` charges 26 characters of chrome per item, for the two-line bullet
+`SymbolRef::render_bullet` emits. `file_context`'s outline rows are one line
+each, so reusing that figure invented 26 phantom characters per symbol — over
+1,500 on a large file, a fifth of the default budget, all of it spent on
+nothing.
+
+When lifting a budgeting helper into a shared module, split it: the part that
+costs a **shared renderer** (`ITEM_CHROME`, which charges `render_bullet`) is
+shared; the part that describes **one tool's own layout** (its header, its
+section rules, its footer) stays with that tool and is passed in —
+`Budget::new(max, reserve)`. A shared constant here is a number that is right
+for one caller and quietly wrong for the next.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

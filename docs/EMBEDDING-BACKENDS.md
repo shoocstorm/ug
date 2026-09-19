@@ -292,7 +292,7 @@ release per target — see `ort` docs.
 ## Running without an embedder
 
 Most of `ug` never touches this subsystem: `find_symbols`, `get_code`,
-`file_outline`, `find_usages`, `shortest_path`, `project_overview` and the
+`file_context`, `find_usages`, `shortest_path`, `project_overview` and the
 `graph_*` tools read `graph.json`, and `analyze` / `traverse` read the database.
 Only three commands are embedding-backed, and they do not all behave the same way
 when no embedder is available.

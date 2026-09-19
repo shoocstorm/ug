@@ -410,7 +410,7 @@
       <tr>
         <td><code>--no-ingest</code></td>
         <td><strong>nothing at all</strong> — no nodes, no edges, no vectors; the db is never opened. Only <code>graph.json</code> is rebuilt.</td>
-        <td>the graph.json tools only: <code>find_symbols</code>, <code>file_outline</code>, <code>get_code</code>, <code>find_usages</code>, <code>context</code>, <code>shortest_path</code>, <code>project_overview</code></td>
+        <td>the graph.json tools only: <code>find_symbols</code>, <code>file_context</code>, <code>get_code</code>, <code>find_usages</code>, <code>context</code>, <code>shortest_path</code>, <code>project_overview</code></td>
         <td><strong>everything the db backs</strong> — <code>ug analyze</code> statistics and blast radius as well as <code>search</code>, <code>chat</code></td>
       </tr>
     </table>
@@ -437,7 +437,7 @@
       <tr><th>Command</th><th>What it does</th><th>Key flags</th></tr>
       <tr><td><code>ug context</code></td><td><strong>Everything about one symbol in one budgeted call</strong> — its doc + source, its callers with call sites, the tests that reach it, its dependencies and its linked docs, each labelled with the role that put it there. Replaces the <code>get_code</code> + <code>find_usages</code> + <code>traverse</code> + <code>analyze test_for</code> sequence.</td><td><code>&lt;symbol&gt;</code> <code>--max-chars</code> <code>--include &lt;role&gt;</code> <code>-n</code> <code>--json</code></td></tr>
       <tr><td><code>ug find_symbols</code></td><td>Symbol lookup by name (case-insensitive, ranked exact &gt; prefix &gt; substring) or by <strong>wildcard</strong> (whole-name match).</td><td><code>--node-type</code> <code>--file-prefix</code> <code>-k</code> <code>--include-docs</code> <code>-n</code></td></tr>
-      <tr><td><code>ug file_outline</code></td><td>List indexed symbols in a file, in line order. Takes a path <strong>glob</strong> to outline many files at once.</td><td><code>&lt;file-or-glob&gt;</code> <code>-k/--max-files</code> <code>--ids</code> <code>-n</code> <code>--json</code></td></tr>
+      <tr><td><code>ug file_context</code></td><td><strong>Everything about one file in one budgeted call</strong>: the symbols it declares, who imports it, what it imports, the tests reaching it, the non-test files depending on it, and its folder siblings. Several files get outlines only.</td><td><code>&lt;file-or-glob-or-id&gt;</code> <code>--max-chars</code> <code>--include &lt;role&gt;</code> <code>-k/--max-files</code> <code>--ids</code> <code>-n</code> <code>--json</code></td></tr>
       <tr><td><code>ug get_code</code></td><td>Read source for a symbol (id, name or wildcard), or a file/line range.</td><td><code>&lt;symbol&gt;</code> <code>-f</code> <code>-s/--start-line</code> <code>-e/--end-line</code> <code>-r/--range</code> <code>--max-chars</code> <code>--no-doc</code></td></tr>
       <tr><td><code>ug find_usages</code></td><td>Find inbound references (callers / importers) to a symbol, with call-site lines.</td><td><code>&lt;symbol&gt;</code> <code>-k/--hops</code> <code>-t/--edge-type</code> <code>-n</code> <code>--json</code></td></tr>
       <tr><td><code>ug shortest_path</code></td><td>How are two symbols connected? Shortest directed edge path. Each endpoint must resolve to exactly one node.</td><td><code>&lt;source&gt;</code> <code>&lt;target&gt;</code> <code>--strict</code> <code>-n</code> <code>--json</code></td></tr>
@@ -452,7 +452,7 @@
 
   <h2>1.3.1 Wildcards</h2>
   <p>Wherever a symbol or file is named — <code>find_symbols</code> names, node types
-  and file filters, <code>file_outline</code> paths, and the symbol arguments of
+  and file filters, <code>file_context</code> paths, and the symbol arguments of
   <code>get_code</code>, <code>find_usages</code>, <code>traverse</code> and
   <code>shortest_path</code> — you can pass a shell-style pattern instead. One matcher
   serves the CLI, the HTTP API and the MCP tools, so a pattern behaves identically on
@@ -483,7 +483,7 @@
     <pre><span class="c-dim">$</span> ug find_symbols <span class="c-str">'handle_*'</span>                          <span class="c-com"># every handler</span>
 <span class="c-dim">$</span> ug find_symbols <span class="c-str">'*Controller'</span> <span class="c-flag">--node-type</span> Class
 <span class="c-dim">$</span> ug find_symbols <span class="c-str">'*'</span> <span class="c-flag">--file-prefix</span> <span class="c-str">'src/auth/**'</span> <span class="c-flag">-k</span> <span class="c-num">100</span>   <span class="c-com"># a whole subtree</span>
-<span class="c-dim">$</span> ug file_outline <span class="c-str">'src/**/*.{ts,tsx}'</span> <span class="c-flag">-k</span> <span class="c-num">40</span>          <span class="c-com"># survey many files at once</span>
+<span class="c-dim">$</span> ug file_context <span class="c-str">'src/**/*.{ts,tsx}'</span> <span class="c-flag">-k</span> <span class="c-num">40</span>          <span class="c-com"># survey many files at once</span>
 <span class="c-dim">$</span> ug find_usages  <span class="c-str">'validate_*'</span>                        <span class="c-com"># blast radius of a family</span>
 <span class="c-dim">$</span> ug traverse     <span class="c-str">'handle_*'</span> <span class="c-flag">-d</span> inbound              <span class="c-com"># one merged walk</span>
 
@@ -703,8 +703,8 @@ function:native/src/cli/gen.rs:run_gen                                   <span c
     <span class="c-flag">-H</span> <span class="c-str">'content-type: application/json'</span> <span class="c-teal">\</span>
     <span class="c-flag">-d</span> <span class="c-str">'{"name":"handle_*","node_types":["Function"],"file_prefix":"src/**"}'</span>
 
-<span class="c-com"># file_outline takes a path glob; get_code and find_usages take a name or pattern</span>
-<span class="c-dim">$</span> curl <span class="c-flag">-s</span> <span class="c-flag">-X</span> POST localhost:8080/api/tools/file_outline <span class="c-flag">-d</span> <span class="c-str">'{"file":"src/**/*.ts"}'</span>
+<span class="c-com"># file_context takes a path glob; get_code and find_usages take a name or pattern</span>
+<span class="c-dim">$</span> curl <span class="c-flag">-s</span> <span class="c-flag">-X</span> POST localhost:8080/api/tools/file_context <span class="c-flag">-d</span> <span class="c-str">'{"file":"src/**/*.ts"}'</span>
 <span class="c-dim">$</span> curl <span class="c-flag">-s</span> <span class="c-flag">-X</span> POST localhost:8080/api/tools/find_usages  <span class="c-flag">-d</span> <span class="c-str">'{"node_id":"validate_*"}'</span>
 
 <span class="c-com"># context takes exactly one symbol — the whole neighbourhood, budgeted</span>
@@ -768,7 +768,7 @@ function:native/src/cli/gen.rs:run_gen                                   <span c
       <tr><td><code>traverse</code></td><td>Walk graph N hops from seed symbols (id, name or <strong>wildcard</strong>). Filters by edge type and direction; several seeds make one merged walk.</td><td>graph.json (no DB needed)</td></tr>
       <tr><td><code>find_usages</code></td><td>Inbound references to a symbol (callers, importers, subclasses), with call sites. Takes an id, a name or a <strong>wildcard</strong>.</td><td>graph.json</td></tr>
       <tr><td><code>find_symbols</code></td><td>Symbol lookup by name (ranked exact &gt; prefix &gt; substring) or by <strong>wildcard</strong>. Filters by node type and file path/glob. Batch via array.</td><td>graph.json</td></tr>
-      <tr><td><code>file_outline</code></td><td>List indexed symbols in a file, in line order. Takes a path, a File node id, or a <strong>glob</strong> covering many files. Batch via array.</td><td>graph.json</td></tr>
+      <tr><td><code>file_context</code></td><td>One file's outline, importers, imports, tests, blast radius and siblings, each labelled by role under one <code>maxChars</code> budget. Takes a path, a File node id, any symbol id, or a <strong>glob</strong> covering many files (outlines only). Batch via array.</td><td>graph.json</td></tr>
       <tr><td><code>get_code</code></td><td>Read source for a symbol (id, name or <strong>wildcard</strong>), or a file/line range — <code>startLine</code>/<code>endLine</code> or a <code>range</code> window like <code>"200-320"</code>.</td><td>ugdb + filesystem fallback</td></tr>
       <tr><td><code>project_overview</code></td><td>Orient in the codebase: stats, biggest files, most depended-upon symbols.</td><td>graph.json</td></tr>
       <tr><td><code>shortest_path</code></td><td>Find shortest directed edge path between two symbols. Each endpoint must resolve to exactly one node.</td><td>graph.json</td></tr>

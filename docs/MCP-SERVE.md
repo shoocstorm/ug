@@ -195,7 +195,7 @@ UG_PROJECT=<project> UG_EMBED_BASE_URL=http://localhost:11434/v1 ug mcp
 ## Wildcards
 
 Everywhere a symbol or file is named — `find_symbols` (`name`, `nodeTypes`,
-`filePrefix`), `file_outline` (`file`), and the `nodeId` of `get_code`,
+`filePrefix`), `file_context` (`file`), and the `nodeId` of `get_code`,
 `find_usages`, `traverse` and `shortest_path` — accepts the same shell-style
 pattern. One matcher serves the MCP tools, the HTTP API and the CLI, so a
 pattern behaves identically wherever you use it.
@@ -216,7 +216,7 @@ at `/` and `**/` crosses directories (matching zero of them too, so
 `src/**/*.rs` finds `src/main.rs`).
 
 **Why it matters for an agent:** one call replaces a loop. `find_usages` with
-`validate_*` gives the blast radius of a whole family; `file_outline` with
+`validate_*` gives the blast radius of a whole family; `file_context` with
 `src/**/*.ts` surveys a subtree; `find_symbols` with `*` plus `filePrefix`
 enumerates a directory. Where a pattern names more symbols than a tool will
 expand (25 for the `nodeId` parameters), the result says so — a truncated
@@ -296,7 +296,7 @@ standalone mode: the query is embedded before either channel runs. `ug search` o
 the command line degrades to a name-substring match when no embedder can be built;
 the MCP tool returns an error instead, deliberately, so an agent is never handed
 substring hits it would read as ranked GraphRAG results. When it errors, switch to
-`find_symbols` / `file_outline` / `find_usages` / `traverse` / `analyze` — none of
+`find_symbols` / `file_context` / `find_usages` / `traverse` / `analyze` — none of
 those touch embeddings. See
 [docs/EMBEDDING-BACKENDS.md](EMBEDDING-BACKENDS.md#running-without-an-embedder).
 
@@ -434,25 +434,35 @@ find_symbols: { name: "*", filePrefix: "src/auth/**", limit: 100 }  // a whole s
 
 ---
 
-### 5. `file_outline` - File Table of Contents
+### 5. `file_context` - Everything About One File
 
-**Every indexed symbol in a file, in line order.** Call before opening or editing a file. Accepts a repo-relative path, a unique suffix (just the basename works if unambiguous; ambiguous suffixes return the candidate list), a File node id, or a **path glob** that outlines every file it matches — one call to survey a directory or a subtree instead of one call per file.
+**One file's outline, importers, imports, tests, blast radius and siblings, in one budgeted call.** What `context` does for a symbol, this does for a file — the unit you are actually handed by a diff, a stack trace or a file the user names. Replaces the six calls you would otherwise spend assembling the same picture (an outline, plus `find_usages`, `traverse`, and the `analyze` `impact` / `impact_summary` / `retest_scope` presets), and does not repeat the outline the way a `traverse` from a File node does.
+
+Roles are filled in priority order — `outline`, `importer`, `import`, `test`, `dependent`, `sibling` — so lowering `maxChars` drops siblings and blast radius before it drops the outline. Whatever does not fit comes back as a count, never a silent cut.
+
+Accepts a repo-relative path, a unique suffix (just the basename works if unambiguous; ambiguous suffixes return the candidate list), a File node id, **any symbol id** (it reports the file holding that symbol), or a **path glob**. One file returns the whole report; several return each file's outline only, with `maxChars` applying per file.
+
+Two things it deliberately does not do: it returns no source code (call `get_code` on the ids it hands you), and its `dependent` count excludes tests and stops at 3 hops — call `analyze impact` for the unfiltered figure.
 
 **Parameters:**
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `nodeId` | string \| string[] | ❌* | Direct File node id lookup — O(1) when you already have the File node id. |
-| `file` | string \| string[] | ❌* | Repo-relative path (`native/src/serve.rs`), unique suffix (`serve.rs`), File node id, or glob (`src/**/*.ts`). Array of up to 10 outlines several in one call. |
-| `maxFiles` | integer (1-200) | ❌ | Files a single glob may outline (default 20). Beyond the cap the remaining paths are listed by name, so nothing is hidden. |
+| `nodeId` | string \| string[] | ❌* | A File node id, or any symbol id to get the file that holds it. |
+| `file` | string \| string[] | ❌* | Repo-relative path (`native/src/serve.rs`), unique suffix (`serve.rs`), File node id, or glob (`src/**/*.ts`). Array of up to 10. |
+| `maxChars` | integer (≥500) | ❌ | Budget for the report (default 8000). Per file when several are named. |
+| `include` | string[] | ❌ | Keep only these roles: `outline`, `importer`, `import`, `test`, `dependent`, `sibling`. |
+| `maxFiles` | integer (1-200) | ❌ | Files a single glob may report (default 20). Beyond the cap the remaining paths are listed by name, so nothing is hidden. |
 
 *One of `nodeId` or `file` is required.
 
 ```
-file_outline: { file: "native/src/mcp/install.rs" }
-file_outline: { nodeId: "file:native/src/mcp/install.rs" }
-file_outline: { file: "native/src/storage/*.rs" }          // one directory
-file_outline: { file: "src/**/*.{ts,tsx}", maxFiles: 40 }  // a whole subtree
-file_outline: { file: "**/test_*.py" }                     // by naming convention
+file_context: { file: "native/src/mcp/install.rs" }                  // the whole report
+file_context: { file: "install.rs", include: ["outline"] }           // just the table of contents
+file_context: { file: "install.rs", include: ["test","dependent"] }  // the edit-safety pair
+file_context: { nodeId: "file:native/src/mcp/install.rs" }
+file_context: { nodeId: "install_skill" }                            // the file holding a symbol
+file_context: { file: "native/src/storage/*.rs" }                    // outline one directory
+file_context: { file: "src/**/*.{ts,tsx}", maxFiles: 40 }            // a whole subtree
 ```
 
 ---
@@ -560,7 +570,7 @@ shortest_path: { sourceId: "file:native/src/mcp/install.rs", targetId: "function
 
 **Counts, groups, distributions and blast radius over the indexed graph.** This is the tool for any question of the form "how many", "what fraction", "which are the biggest / longest / most depended-upon", "what does nothing call", "which folders depend on which", "what breaks if I change this file".
 
-The point is cost. "How many methods are longer than 50 lines?" answered by grep-and-read is ~500k tokens on a medium repo and impossible on a monorepo; answered by looping `file_outline` it is ~40k tokens and 80 round trips. `analyze` answers it in one call and about 100 tokens, because ingest already stored the facts a query engine can aggregate.
+The point is cost. "How many methods are longer than 50 lines?" answered by grep-and-read is ~500k tokens on a medium repo and impossible on a monorepo; answered by looping `file_context --include outline` it is ~40k tokens and 80 round trips. `analyze` answers it in one call and about 100 tokens, because ingest already stored the facts a query engine can aggregate.
 
 Two ways to call it:
 
@@ -743,9 +753,9 @@ find_symbols: { name: "authenticateUser" }
 find_symbols: { nodeId: "function:src/auth.ts:authenticateUser" }
 
 # File path lookup
-file_outline: { file: "src/auth.ts" }
+file_context: { file: "src/auth.ts" }
 # Direct nodeId lookup for File nodes (O(1))
-file_outline: { nodeId: "file:src/auth.ts" }
+file_context: { nodeId: "file:src/auth.ts" }
 
 traverse: { nodeId: "function:src/auth.ts:authenticateUser", hops: 2,
             edgeTypes: ["calls", "imports"] }
@@ -798,7 +808,7 @@ ug mcp list
 
 # Invoke any tool one-shot with its arguments as a JSON string
 ug mcp call find_symbols '{"name":"run_mcp"}'
-ug mcp call file_outline '{"file":"chat.rs"}'
+ug mcp call file_context '{"file":"chat.rs"}'
 ug mcp call list_projects '{}'
 ug mcp call search '{"query":"how does auth work","k":8}'
 ug mcp call gen '{}'

@@ -257,7 +257,7 @@ pub fn is_test_node(n: &GraphNode) -> bool {
 /// Spelled out rather than derived from `Debug`, so a rename of the enum
 /// variant cannot silently change a stored property that queries and
 /// saved presets filter on.
-fn classification_str(c: &FileClassification) -> &'static str {
+pub(crate) fn classification_str(c: &FileClassification) -> &'static str {
     match c {
         FileClassification::Component => "component",
         FileClassification::Page => "page",

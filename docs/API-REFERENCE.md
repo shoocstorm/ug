@@ -37,7 +37,7 @@ database altogether — the difference decides whether `ug analyze` (statistics,
 |---|---|---|---|
 | *(default)* | nodes, edges, facts and keyword/BM25 statistics — **everything except the vectors**. No embedding model is loaded, which is most of a small run's wall clock. | the graph.json tools **and `ug analyze`** — statistics, `diff_impact`, `boundary_impact`, blast radius, `traverse --dest` | `search`, `chat` — they miss the changed nodes until the vectors are backfilled |
 | `--with-embed` | all of the above **plus the vectors**. Loads the embedding model (local fastembed, or a remote `--base-url` endpoint). | everything, semantic search included | — |
-| `--no-ingest` | **nothing** — no nodes, no edges, no vectors; the db is never opened. Only `graph.json` is rebuilt. | the graph.json tools only: `find_symbols`, `file_outline`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema` | **everything the db backs** — `ug analyze` statistics and blast radius as well as `search`, `chat` |
+| `--no-ingest` | **nothing** — no nodes, no edges, no vectors; the db is never opened. Only `graph.json` is rebuilt. | the graph.json tools only: `find_symbols`, `file_context`, `get_code`, `find_usages`, `shortest_path`, `project_overview`, `graph_schema` | **everything the db backs** — `ug analyze` statistics and blast radius as well as `search`, `chat` |
 
 `ug ingest -n <project>` catches the db up whenever you like; it embeds only the
 nodes still owed a vector. A run without `--with-embed` records the debt in
@@ -65,7 +65,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 |---------|---------|-------------|-----------|
 | `ug context` | — | **Everything about one symbol in one budgeted call**: its source, callers with call sites, tests reaching it, dependencies and linked docs — each labelled with the role that put it there. Replaces `get_code` + `find_usages` + `traverse` + `analyze test_for`. | `<symbol>` positional (must resolve to exactly one), `--max-chars <n>` (default 12000), `--include <role>` (repeatable: `target`, `caller`, `test`, `dependency`, `doc`), `-n <name>`, `--json` |
 | `ug find_symbols` | — | Symbol lookup by name, fragment (ranked exact > prefix > substring) or **wildcard**. | `--node-type <type>` (repeatable, wildcards ok), `--file-prefix <prefix-or-glob>`, `--boundary`, `-k <limit>`, `--include-docs`, `-n <name>`, `--json`, `-o <file>` |
-| `ug file_outline` | — | List indexed symbols in a file, in line order. Takes a path **glob**. | `<file-or-glob>` positional(s), `-k/--max-files <n>` (default 20), `--ids`, `-n <name>`, `--json` |
+| `ug file_context` | — | **Everything about one file in one budgeted call**: the symbols it declares, the files that import it, what it imports, the tests reaching it, the non-test files that depend on it, and its folder siblings — each labelled with the role that put it there. Replaces an outline + `find_usages` + `traverse` + three `analyze` presets. Several files get outlines only. | `<file-or-glob-or-id>` positional(s), `--max-chars <n>` (default 8000, per file in a batch), `--include <role>` (repeatable: `outline`, `importer`, `import`, `test`, `dependent`, `sibling`), `-k/--max-files <n>` (default 20), `--ids`, `-n <name>`, `--json` |
 | `ug get_code` | — | Read source for a symbol (id, name or wildcard), or a file/line range. | `<symbol>...` or `-f <file>`, `-s/--start-line`, `-e/--end-line`, `-r/--range <window>` (`11-35` · `34-end` · `20`, same dialect as `ug analyze --range`), `--max-chars`, `--no-doc`, `-n <name>` |
 | `ug find_usages` | — | Find inbound references (callers/importers) to a symbol. | `<symbol>...` positional(s), `-k/--hops`, `-t/--edge-type`, `-n <name>`, `--json` |
 | `ug project_overview` | — | Orient in the codebase: stats, biggest files, most depended-upon symbols. | `-n <name>`, `--json` |
@@ -74,7 +74,7 @@ These accept the same params as their MCP counterparts and can output `--json`.
 #### Wildcards
 
 Every place a symbol or file is named — `find_symbols` names, node types and
-file filters, `file_outline` paths, and the symbol arguments of `get_code`,
+file filters, `file_context` paths, and the symbol arguments of `get_code`,
 `find_usages`, `traverse` and `shortest_path` — accepts the same shell-style
 pattern. One matcher (`native/src/pattern.rs`) serves the CLI, HTTP and MCP,
 so the dialect is identical on all three.
@@ -100,7 +100,7 @@ ug find_symbols '*Controller' --node-type Class
 ug find_symbols '*' --file-prefix 'src/auth/**' -k 100
 ug find_symbols --boundary                       # every entry and exit point
                                                  # (no name needed — it is a listing)
-ug file_outline 'src/**/*.{ts,tsx}' -k 40        # survey a subtree
+ug file_context 'src/**/*.{ts,tsx}' -k 40        # survey a subtree
 ug find_usages 'validate_*'                      # blast radius of a family
 ug traverse 'handle_*' -d inbound
 ug get_code 'render_*' --no-doc
@@ -215,7 +215,7 @@ is behind the tree, naming the files that drifted.
   Structural answers describe the last index. Refresh: ug update <file>... (fast) or ug gen -n ug.
 ```
 
-This covers the graph.json readers (`find_symbols`, `file_outline`,
+This covers the graph.json readers (`find_symbols`, `file_context`,
 `get_code`, `find_usages`, `project_overview`, `graph_schema`,
 `shortest_path`) and the db readers (`analyze`, `search`, `traverse`, `chat`,
 `tour`). The commands that *write* the index — `gen`,
@@ -430,7 +430,7 @@ These 14 tools are advertised over MCP `tools/list` and also available via the C
 | `traverse` | Walk graph N hops from seed symbols (id, name or wildcard). Filters by edge type and direction; several seeds make one merged walk. | graph.json (graph-backed, no DB needed) | graph.json missing/invalid |
 | `find_usages` | Inbound references to a symbol (callers, importers, subclasses, etc.), by id, name or wildcard. Wrapper over traverse with direction=inbound + sensible defaults. Call-site lines come from each caller's stored source, with filesystem fallback. | graph.json (+ ugdb for call sites) | graph.json missing/invalid |
 | `find_symbols` | Symbol lookup by name (case-insensitive, ranked exact > prefix > substring) or by wildcard pattern (whole-name match). Filters by node type, file path/glob, and `boundary` (system entry/exit points only — works with no name at all, which lists the whole surface). Supports batch via array of names/patterns/ids. | graph.json | graph.json missing/invalid |
-| `file_outline` | List every indexed symbol in a file, in line order. Accepts a path, unique suffix, File node id, or path glob (up to `maxFiles` files). Supports batch via array. | graph.json | graph.json missing/invalid |
+| `file_context` | **Curated bundle for one file**: its symbols in line order + the files importing it + what it imports + the tests reaching it + the non-test files depending on it + its folder siblings, each item labelled by role, filled in priority order under one `maxChars` budget. Accepts a path, unique suffix, File node id, any symbol id (reports its file), or a path glob (up to `maxFiles` files, outlines only). Assembly over facts already in the graph, so it needs neither the store nor an embedder. | graph.json | graph.json missing/invalid |
 | `get_code` | Read source for a symbol (id, name or wildcard) or a file/line range. Works from stored source in DB (consistent with search) with filesystem fallback; a file/line range is cut out of the file's whole-file capture, so it needs no working tree either. | ugdb (preferred) + filesystem fallback | node/file captured in neither ugdb nor the working tree |
 | `project_overview` | Orient in the codebase: repo root, node/edge counts, biggest files, most depended-upon symbols. | graph.json | graph.json missing/invalid |
 | `context` | **Curated bundle for one symbol**: source + callers (with call sites) + tests + dependencies + linked docs, each item labelled by role, filled in priority order under one `maxChars` budget. Assembly over the existing tools, not new analysis — so it needs no embedder and no db beyond the stored source `get_code` and `find_usages` already use. Takes exactly one symbol; an ambiguous name is an error listing the candidates. | graph.json (+ ugdb for source & call sites) | graph.json missing/invalid, or the symbol resolves to zero/several nodes |

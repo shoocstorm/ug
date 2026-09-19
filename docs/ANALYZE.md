@@ -8,7 +8,7 @@ this file?"*. One MCP tool / CLI command / HTTP route; capability grows through
 
 The point is cost. Answered by grep-and-read, "how many methods are longer than
 50 lines?" is ~500k tokens on a medium repo and impossible on a monorepo;
-answered by looping `file_outline` it is ~40k tokens and 80 round-trips.
+answered by looping `file_context` it is ~40k tokens and 80 round-trips.
 `analyze` answers it in one call and roughly 100 tokens, because ingest
 already stored the facts a query engine can aggregate.
 

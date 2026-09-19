@@ -311,7 +311,7 @@ pub fn render_project_overview(r: &ProjectOverviewResult, style: Render) -> Stri
         &mut out,
         style,
         &[
-            ("file_outline <file>", "on a big file"),
+            ("file_context <file>", "on a big file"),
             ("get_code <id>", "on a hotspot"),
             ("search <query>", "for a concept"),
         ],

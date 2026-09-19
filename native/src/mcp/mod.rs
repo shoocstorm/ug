@@ -78,7 +78,7 @@ Two habits make them cheap:
 pattern: * (any run of chars), ? (one char), [abc]/[a-z], [!ab], {a,b}. Patterns \
 match the WHOLE name (use *auth* to match anywhere); in paths * stops at / and **/ \
 crosses directories. So one call covers a whole family: find_symbols {name: \
-'handle_*'}, find_usages {nodeId: 'validate_*'}, file_outline {file: 'src/**/*.ts'}, \
+'handle_*'}, find_usages {nodeId: 'validate_*'}, file_context {file: 'src/**/*.ts'}, \
 find_symbols {name: '*', filePrefix: 'src/auth/**'}. Reach for this whenever you \
 would otherwise loop.
 
@@ -876,7 +876,7 @@ impl Mcp {
                 text.push_str(&self.query_capabilities(&ctx).await);
                 Ok(with_staleness(text))
             }
-            "find_symbols" | "file_outline" | "find_usages" | "traverse" | "shortest_path"
+            "find_symbols" | "file_context" | "find_usages" | "traverse" | "shortest_path"
             | "project_overview" | "get_code" | "context" => {
                 Ok(with_staleness(self.tool_graph(name, &ctx, args).await?))
             }
@@ -2178,12 +2178,12 @@ mod tool_dispatch_tests {
     }
 
     #[tokio::test]
-    async fn file_outline_lists_a_files_symbols() {
+    async fn file_context_lists_a_files_symbols_and_neighbours() {
         let mut env = crate::project::EnvGuard::new_async().await;
         let _guard = project(&mut env, "p");
-        let out = call("file_outline", json!({ "project": "p", "file": "src/a.rs" }))
+        let out = call("file_context", json!({ "project": "p", "file": "src/a.rs" }))
             .await
-            .expect("file_outline");
+            .expect("file_context");
         assert!(out.contains("caller") && out.contains("callee"), "{out}");
     }
 

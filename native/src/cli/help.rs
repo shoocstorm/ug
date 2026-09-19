@@ -132,7 +132,7 @@ pub(crate) fn print_help() {
     cont("needs git; the model is optional — without one, a ranked itinerary");
     cmd("find_symbols", "Find symbols by name or wildcard — start here; gives the ids below");
     cmd("get_code", "Read a symbol's source, or a file and line range");
-    cmd("file_outline", "Every indexed symbol in a file, in line order");
+    cmd("file_context", "Everything about one file at once: outline, importers, tests, blast radius");
     cmd("find_usages", "Who calls or imports this? Callers, importers, call sites");
     cmd("shortest_path", "How two symbols are connected (directed edge path)");
     cmd("project_overview", "Orient: stats, biggest files, most depended-upon symbols");

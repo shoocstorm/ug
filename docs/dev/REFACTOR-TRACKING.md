@@ -60,7 +60,7 @@ Verified check --all-targets clean, nextest --lib 607/607, --test integration
 280/280, clippy: 0 lints under agent_tools/.)
 - [x] `mod.rs` — shared machinery: Render helpers, node/edge type strs,
       refs/Matchers, by_id_map, node_loc.
-- [x] one file per tool family: find_symbols, file_outline, get_code,
+- [x] one file per tool family: find_symbols, file_context, get_code,
       find_usages, traverse/context, project_overview, graph_schema,
       search.
 - Verify: same as batch 1.

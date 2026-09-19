@@ -606,7 +606,7 @@ not the whole answer. Call tools before answering whenever the question asks for
 items don't already show completely:\n\
 - `find_usages` for \"what calls / uses X\" — the items rarely contain every call site.\n\
 - `get_code` to read a symbol's exact source before describing or quoting it.\n\
-- `file_outline` to see everything a file declares.\n\
+- `file_context` to see everything a file declares, plus what imports and tests it.\n\
 - `find_symbols` to resolve a name you were given into a real node id.\n\
 - `search` to widen the net when the items look thin or off-topic.\n\
 - `shortest_path` / `traverse` to show how two things connect.\n\n\
