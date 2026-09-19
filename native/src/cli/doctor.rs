@@ -157,6 +157,52 @@ pub(crate) fn run_doctor(args: &[String]) {
     println!("{C_BOLD}Model cache{C_RESET} (ONNX weights for the local embedder)");
     println!("  {}", ultragraph::storage::embed::local::local_model_cache_dir().display());
     println!("  resolution: $UG_MODEL_CACHE → $XDG_CACHE_HOME/ug/models → platform cache dir → temp dir");
+    println!();
+
+    print_shell_glob_report();
+}
+
+/// Report whether this shell will let an unquoted wildcard reach `ug`.
+///
+/// Belongs in `doctor` because it is environment, not configuration, and
+/// because it is the one ug problem ug cannot detect while it is happening:
+/// under zsh's default `NOMATCH`, `ug find_usages 'index_*'` without the
+/// quotes fails in the shell and ug is never executed, so there is no run in
+/// which to print a hint. The only place to say it is somewhere the user
+/// looks *after* being confused — which is what this command is for.
+fn print_shell_glob_report() {
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    if !shell.contains("zsh") {
+        return;
+    }
+    println!("{C_BOLD}Shell{C_RESET} (unquoted wildcards)");
+    println!("  {shell}");
+    if zshrc_has_noglob_alias() {
+        println!("  {C_GREEN}alias ug='noglob ug' found in ~/.zshrc{C_RESET} — unquoted patterns reach ug intact");
+        return;
+    }
+    println!("  {C_YELLOW}zsh expands wildcards before ug runs.{C_RESET} Quote every pattern:");
+    println!("    {C_CYAN}ug find_usages 'index_*'{C_RESET}   not   {C_CYAN}ug find_usages index_*{C_RESET}");
+    println!("  Unquoted, zsh aborts with \"no matches found\" and ug never runs — or, if");
+    println!("  files happen to match, hands ug those filenames instead of your pattern.");
+    println!("  To stop having to quote: {C_CYAN}echo \"alias ug='noglob ug'\" >> ~/.zshrc{C_RESET}");
+}
+
+/// Is the alias already installed? Read rather than inferred: ug is executed
+/// the same way with or without it, so the process cannot tell from its own
+/// arguments whether globbing was suppressed.
+fn zshrc_has_noglob_alias() -> bool {
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    let rc = std::path::Path::new(&home).join(".zshrc");
+    let Ok(text) = std::fs::read_to_string(rc) else {
+        return false;
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .any(|l| l.contains("noglob") && l.contains("ug"))
 }
 
 fn print_doctor_help() {

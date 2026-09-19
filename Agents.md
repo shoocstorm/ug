@@ -1802,6 +1802,15 @@ skill body, the skill's mistakes list) and documentation could not have
 prevented this: the first case *teaches the wrong lesson*. An agent that tries
 it once in bash, sees it work, and generalises is behaving reasonably.
 
+The zsh case cannot be fixed from inside `ug` at all: `NOMATCH` aborts the
+command before `exec`, so there is no run in which to print a hint. A process
+cannot report its own non-invocation. The fix is `alias ug='noglob ug'` in
+`~/.zshrc`, which suppresses expansion for this command only and lets ug's own
+matcher do the work; `ug doctor` reports whether it is installed, and the
+wildcard help says so when `$SHELL` is zsh — both being places someone looks
+*after* being confused, which is the best available when the moment of failure
+is unreachable.
+
 `warn_if_shell_expanded` (`cli/agent.rs`) now fires when every positional
 names a file that exists on disk — the shape glob expansion leaves behind and
 a list of symbol names is not. It warns rather than refuses, because passing

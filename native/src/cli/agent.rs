@@ -150,6 +150,10 @@ pub(crate) fn print_wildcard_help() {
     println!("  {C_CYAN}\\*{C_RESET}     a literal asterisk");
     println!("  A pattern must match the {C_BOLD}whole{C_RESET} name: {C_CYAN}auth*{C_RESET} finds authorize, {C_CYAN}*auth*{C_RESET} finds reauth.");
     println!("  In paths, {C_CYAN}*{C_RESET} stops at {C_CYAN}/{C_RESET} and {C_CYAN}**/{C_RESET} crosses directories: {C_CYAN}src/**/*.ts{C_RESET}.");
+    if std::env::var("SHELL").unwrap_or_default().contains("zsh") {
+        println!("  {C_DIM}zsh: an unquoted pattern fails with \"no matches found\" before ug runs.{C_RESET}");
+        println!("  {C_DIM}To stop quoting:{C_RESET} {C_CYAN}echo \"alias ug='noglob ug'\" >> ~/.zshrc{C_RESET}");
+    }
 }
 
 /// Warn when the positional arguments look like a wildcard the shell already
