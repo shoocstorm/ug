@@ -152,6 +152,16 @@ format), stream only the final answer, and show every call to the user as it hap
 
 **Always verify changes with tests before marking a task complete.**
 
+### Do not run `cargo fmt`
+
+This tree is not rustfmt-clean and never has been. `cargo fmt` rewrites
+**115 files, +5444/-1750**, none of it related to whatever you are doing, and
+the churn lands in the files you legitimately touched as well as everywhere
+else — untangling it afterwards costs more than the formatting is worth.
+Match the formatting of the code around your edit and leave the rest alone.
+`cargo clippy --all-targets` is the lint that is worth running; it is clean,
+so a warning from it is yours.
+
 ### Rust Tests (Native Code)
 - Run `cd native && cargo nextest run` to execute all Rust tests
 - **Use `cargo nextest run`, not `cargo test`.** `cargo test -- --test-threads=N`
