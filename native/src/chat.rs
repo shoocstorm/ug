@@ -11,6 +11,8 @@
 //! (OpenAI, vLLM, llama.cpp, Ollama via the openai-compat shim, MLX
 //! server, etc).
 
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -617,78 +619,146 @@ split a compound question into separate searches. Searching two or three times w
 is normal and expected; answering from a poor first pass is not.\n\n\
 Pass arguments as real JSON, not JSON inside a string: `\"nodeId\": \"function:src/a.rs:1:foo\"` for \
 one id, `\"nodeId\": [\"id1\", \"id2\"]` for several. Never `\"nodeId\": \"[\\\"id1\\\"]\"`.\n\n\
-Prefer one or two well-aimed calls over guessing. Cite retrieved items with [#N] as usual; describe \
-tool findings in prose. If the items already answer the question completely, just answer.";
+Prefer one or two well-aimed calls over guessing. A `search` result is numbered in the SAME [#N] run \
+as the items above — it continues the list rather than restarting it, so cite what a search found by \
+its own number exactly as you cite the items above. Describe findings from the other tools in prose. \
+If the items already answer the question completely, just answer.";
 
-/// Render a retrieval pack into a single prompt string. Each item is
-/// labelled `[#i]` so the model can cite it; the answerer can then map
-/// `[#i]` back to a `ContextItem` for the final citation list.
-///
-/// `max_chars` is a soft cap applied across the whole assembled block —
-/// once exceeded the remaining items are dropped (head-truncation
-/// would split snippets mid-token, which the model handles worse than
-/// just omitting the lowest-ranked items).
-pub fn render_context(items: &[ContextItem], max_chars: usize) -> String {
-    let mut out = String::with_capacity(items.len() * 256);
-    for (i, item) in items.iter().enumerate() {
-        let header = if item.start_line > 0 && item.end_line >= item.start_line {
-            format!(
-                "[#{}] {} ({}) — {}:{}-{}",
-                i + 1,
-                item.name,
-                item.node_type,
-                if item.file.is_empty() { "<unknown>" } else { item.file.as_str() },
-                item.start_line,
-                item.end_line
-            )
-        } else {
-            format!(
-                "[#{}] {} ({}) — {}",
-                i + 1,
-                item.name,
-                item.node_type,
-                if item.file.is_empty() { "<unknown>" } else { item.file.as_str() }
-            )
-        };
+/// One `[#n]` block: the header line, the description, the snippet.
+fn render_item(n: usize, item: &ContextItem) -> String {
+    let header = if item.start_line > 0 && item.end_line >= item.start_line {
+        format!(
+            "[#{}] {} ({}) — {}:{}-{}",
+            n,
+            item.name,
+            item.node_type,
+            if item.file.is_empty() { "<unknown>" } else { item.file.as_str() },
+            item.start_line,
+            item.end_line
+        )
+    } else {
+        format!(
+            "[#{}] {} ({}) — {}",
+            n,
+            item.name,
+            item.node_type,
+            if item.file.is_empty() { "<unknown>" } else { item.file.as_str() }
+        )
+    };
 
-        let mut block = String::with_capacity(header.len() + 256);
-        block.push_str(&header);
+    let mut block = String::with_capacity(header.len() + 256);
+    block.push_str(&header);
+    block.push('\n');
+    if !item.description.is_empty() {
+        block.push_str(item.description.trim());
         block.push('\n');
-        if !item.description.is_empty() {
-            block.push_str(item.description.trim());
-            block.push('\n');
-        }
-        if let Some(snippet) = item.snippet.as_ref() {
-            if !snippet.is_empty() {
-                block.push_str("```\n");
-                block.push_str(snippet.trim_end_matches('\n'));
-                block.push_str("\n```\n");
-            }
-        }
-        block.push('\n');
-
-        if !out.is_empty() && out.len() + block.len() > max_chars {
-            break;
-        }
-        out.push_str(&block);
     }
-    out
+    if let Some(snippet) = item.snippet.as_ref() {
+        if !snippet.is_empty() {
+            block.push_str("```\n");
+            block.push_str(snippet.trim_end_matches('\n'));
+            block.push_str("\n```\n");
+        }
+    }
+    block.push('\n');
+    block
+}
+
+/// The one `[#N]` namespace a turn has.
+///
+/// Numbering used to restart at `[#1]` on every call, and a turn renders at
+/// least twice the moment the model takes the suffix's advice and searches
+/// again: once for the seed pack, once per `search` result. Both blocks then
+/// claimed `[#1]`, `[#2]`, `[#3]`; the model cited a number that meant two
+/// different nodes, and the citation the reader clicked was whichever one the
+/// seed pack happened to have put there. **The failure got worse the better
+/// the model behaved** — only a turn that re-searched could hit it.
+///
+/// The ledger hands each node a number once per turn and remembers it, so a
+/// re-search extends the evidence list instead of overwriting it, and what
+/// the reader is shown is everything the answer was actually allowed to cite.
+#[derive(Default)]
+pub struct CitationLedger {
+    items: Vec<ContextItem>,
+    /// node id → zero-based position in `items`.
+    seen: HashMap<String, usize>,
+}
+
+impl CitationLedger {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Everything cited so far, in `[#1]`, `[#2]`, … order.
+    pub fn items(&self) -> &[ContextItem] {
+        &self.items
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Start a new turn. The REPL carries history across turns but rebuilds
+    /// the context block each time, so numbers have to restart with it —
+    /// otherwise turn two opens at `[#9]` with `[#1]`..`[#8]` nowhere in
+    /// sight.
+    pub fn reset(&mut self) {
+        self.items.clear();
+        self.seen.clear();
+    }
+
+    /// Render items for the prompt under this turn's numbering.
+    ///
+    /// `max_chars` is a soft cap across the assembled block — once exceeded
+    /// the remaining items are dropped, because head-truncation would split
+    /// a snippet mid-token and the model handles that worse than simply not
+    /// being shown the lowest-ranked items.
+    ///
+    /// A node already cited keeps the number it has — the model gets told
+    /// "this is [#3] again" rather than a second name for the same thing,
+    /// which is also what stops a re-search that returns the same neighbourhood
+    /// from doubling the citation list.
+    ///
+    /// **Only what is rendered is registered.** `max_chars` drops the tail,
+    /// and an item the model was never shown must not turn up in the list of
+    /// sources the reader is told the answer rests on.
+    pub fn render(&mut self, items: &[ContextItem], max_chars: usize) -> String {
+        let mut out = String::with_capacity(items.len() * 256);
+        for item in items {
+            let existing = self.seen.get(&item.id).copied();
+            let n = existing.unwrap_or(self.items.len());
+            let block = render_item(n + 1, item);
+            if !out.is_empty() && out.len() + block.len() > max_chars {
+                break;
+            }
+            if existing.is_none() {
+                self.seen.insert(item.id.clone(), n);
+                self.items.push(item.clone());
+            }
+            out.push_str(&block);
+        }
+        out
+    }
 }
 
 /// Build the standard prompt (system + RAG context + user query).
+///
+/// The seed pack registers into `ledger` first, so it owns `[#1]` upward and
+/// anything a tool retrieves later continues the same run of numbers.
 pub fn build_rag_messages(
     query: &str,
     context: &RankedContext,
     history: &[ChatMessage],
     system_prompt: Option<&str>,
     ctx_max_chars: usize,
+    ledger: &mut CitationLedger,
 ) -> Vec<ChatMessage> {
     let system = system_prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT);
     let mut msgs: Vec<ChatMessage> = Vec::with_capacity(history.len() + 3);
 
     msgs.push(ChatMessage::new("system", system));
 
-    let rendered = render_context(&context.items, ctx_max_chars);
+    let rendered = ledger.render(&context.items, ctx_max_chars);
     let preface = if rendered.is_empty() {
         "No retrieved context was found for this query.".to_string()
     } else {
@@ -719,6 +789,12 @@ pub struct ChatRagOutcome {
     /// How many tool calls the model made getting to this answer.
     pub tool_calls: usize,
     pub answer: String,
+    /// Everything the answer was allowed to cite, in `[#1]`, `[#2]`, … order:
+    /// the seed pack plus whatever the model's own searches added. `context`
+    /// below is the *first* retrieval alone — it still carries `seed_id` and
+    /// the retrieval timing, but it is not the evidence list once a turn has
+    /// searched again.
+    pub citations: Vec<ContextItem>,
     /// Separately-streamed chain-of-thought text, when the provider
     /// sends one (`reasoning_content`). Empty for providers that inline
     /// it in `answer` as `<think>` tags — callers handle those.
@@ -775,6 +851,7 @@ pub async fn run_chat_tool(
     repo_root: &std::path::Path,
     store: &dyn KnowledgeStore,
     embedder: Option<&Embedder>,
+    ledger: &Mutex<CitationLedger>,
 ) -> Result<String, String> {
     use ultragraph::agent_tools;
 
@@ -786,7 +863,7 @@ pub async fn run_chat_tool(
 
     match name {
         "search" | "semantic_search" => {
-            run_search_tool(name, &args, store, embedder, repo_root).await
+            run_search_tool(name, &args, store, embedder, repo_root, ledger).await
         }
         // Statistics come from the store's indexed properties, not the graph —
         // the one thing `agent_tools::run_tool` cannot answer.
@@ -828,6 +905,7 @@ pub async fn run_search_tool(
     store: &dyn KnowledgeStore,
     embedder: Option<&Embedder>,
     repo_root: &std::path::Path,
+    ledger: &Mutex<CitationLedger>,
 ) -> Result<String, String> {
     let embedder = embedder.ok_or("no embedder configured — semantic tools are offline")?;
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or_default().trim();
@@ -851,7 +929,15 @@ pub async fn run_search_tool(
     let ctx = storage_search_kb(store, embedder, opts)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(render_context(&ctx.items, 6_000))
+    // Numbered by the turn's ledger, not from [#1] again: this block and the
+    // seed pack share one conversation, so they have to share one namespace.
+    // The lock is held across the render and nothing else — a guard alive
+    // across an `await` would make this future `!Send`.
+    let rendered = {
+        let mut l = ledger.lock().expect("citation ledger poisoned");
+        l.render(&ctx.items, 6_000)
+    };
+    Ok(rendered)
 }
 
 /// What happened during a tool-calling exchange, for progress reporting.
@@ -1092,12 +1178,12 @@ mod tests {
     }
 
     #[test]
-    fn render_context_numbers_items_and_includes_snippets() {
+    fn a_pack_numbers_items_and_includes_snippets() {
         let items = vec![
             fake_item(1, Some("fn fn_1() {}")),
             fake_item(2, None),
         ];
-        let out = render_context(&items, 10_000);
+        let out = CitationLedger::new().render(&items, 10_000);
         assert!(out.contains("[#1]"));
         assert!(out.contains("[#2]"));
         assert!(out.contains("fn_1"));
@@ -1107,17 +1193,102 @@ mod tests {
     }
 
     #[test]
-    fn render_context_truncates_at_char_budget() {
+    fn a_pack_truncates_at_char_budget() {
         let big_snippet: String = "x".repeat(5_000);
         let items = vec![
             fake_item(1, Some(&big_snippet)),
             fake_item(2, Some(&big_snippet)),
             fake_item(3, Some(&big_snippet)),
         ];
-        let out = render_context(&items, 6_000);
+        let out = CitationLedger::new().render(&items, 6_000);
         // Should fit the first item but stop before the third.
         assert!(out.contains("[#1]"));
         assert!(!out.contains("[#3]"), "third item should be dropped");
+    }
+
+    // ---------- the turn's [#N] namespace ----------
+    //
+    // The bug these pin: numbering restarted at [#1] on every render, so a
+    // turn that took the tool suffix's advice and searched again produced a
+    // second block also numbered [#1], [#2], [#3]. The model then cited a
+    // number that meant two different nodes, and the citation the reader
+    // clicked resolved against whichever one the seed pack had put there.
+
+    #[test]
+    fn a_second_render_continues_the_numbering() {
+        let mut ledger = CitationLedger::new();
+        let seed = ledger.render(&[fake_item(1, None), fake_item(2, None)], 10_000);
+        assert!(seed.contains("[#1]") && seed.contains("[#2]"), "{seed}");
+
+        // What a `search` tool call renders mid-turn.
+        let found = ledger.render(&[fake_item(3, None)], 10_000);
+        assert!(found.contains("[#3]"), "a re-search must not restart at [#1]:\n{found}");
+        assert!(!found.contains("[#1]"), "{found}");
+        assert_eq!(ledger.len(), 3);
+    }
+
+    #[test]
+    fn a_node_cited_twice_keeps_its_first_number() {
+        let mut ledger = CitationLedger::new();
+        ledger.render(&[fake_item(1, None), fake_item(2, None)], 10_000);
+        // A re-search returns the same neighbourhood plus one new node.
+        let again = ledger.render(&[fake_item(2, None), fake_item(9, None)], 10_000);
+        assert!(again.contains("[#2]"), "the repeat keeps its number:\n{again}");
+        assert!(again.contains("[#3]"), "the new node gets the next one:\n{again}");
+        assert_eq!(ledger.len(), 3, "a repeat must not lengthen the evidence list");
+    }
+
+    #[test]
+    fn only_what_is_rendered_is_cited() {
+        // An item dropped by the budget was never shown to the model, so
+        // listing it as a source tells the reader the answer rests on
+        // something it could not have read.
+        let big: String = "x".repeat(2_000);
+        let mut ledger = CitationLedger::new();
+        let out = ledger.render(
+            &[fake_item(1, Some(&big)), fake_item(2, Some(&big)), fake_item(3, Some(&big))],
+            6_000,
+        );
+        assert!(out.contains("[#2]") && !out.contains("[#3]"), "{out}");
+        assert_eq!(ledger.len(), 2, "the dropped item must not be cited");
+    }
+
+    #[test]
+    fn a_reset_starts_the_numbering_again() {
+        let mut ledger = CitationLedger::new();
+        ledger.render(&[fake_item(1, None), fake_item(2, None)], 10_000);
+        ledger.reset();
+        let next = ledger.render(&[fake_item(7, None)], 10_000);
+        assert!(next.contains("[#1]"), "a new turn opens at [#1]:\n{next}");
+        assert_eq!(ledger.len(), 1);
+    }
+
+    #[test]
+    fn the_seed_pack_takes_the_first_numbers() {
+        // build_rag_messages must register before any tool runs, or a tool
+        // that renders first would take [#1] out from under the pack the
+        // user is shown.
+        let ctx = RankedContext {
+            query: "q".into(),
+            items: vec![fake_item(1, None), fake_item(2, None)],
+            total_chars: 0,
+            seed_id: None,
+        };
+        let mut ledger = CitationLedger::new();
+        let msgs = build_rag_messages("q", &ctx, &[], None, 10_000, &mut ledger);
+        assert!(msgs[1].content.contains("[#1]") && msgs[1].content.contains("[#2]"));
+        assert_eq!(ledger.len(), 2);
+        assert_eq!(ledger.items()[0].id, fake_item(1, None).id);
+    }
+
+    #[test]
+    fn the_tool_suffix_tells_the_model_the_numbering_is_shared() {
+        // The suffix is what makes a searched-for node citable at all: a
+        // model told to describe tool findings "in prose" will not cite them.
+        assert!(
+            TOOL_SYSTEM_SUFFIX.contains("SAME [#N] run"),
+            "the suffix must say search results continue the numbering"
+        );
     }
 
     #[test]
@@ -1132,7 +1303,14 @@ mod tests {
             ChatMessage::new("user", "prev?"),
             ChatMessage::new("assistant", "prev!"),
         ];
-        let msgs = build_rag_messages("now?", &ctx, &history, Some("CUSTOM"), 10_000);
+        let msgs = build_rag_messages(
+            "now?",
+            &ctx,
+            &history,
+            Some("CUSTOM"),
+            10_000,
+            &mut CitationLedger::new(),
+        );
 
         // [system, system(context), user(prev), assistant(prev), user(now)]
         assert_eq!(msgs.len(), 5);
@@ -1199,7 +1377,8 @@ mod tests {
             total_chars: 0,
             seed_id: None,
         };
-        let msgs = build_rag_messages("hello", &ctx, &[], None, 10_000);
+        let msgs =
+            build_rag_messages("hello", &ctx, &[], None, 10_000, &mut CitationLedger::new());
         assert_eq!(msgs[0].content, DEFAULT_SYSTEM_PROMPT);
         assert!(msgs[1].content.starts_with("No retrieved context"));
     }
@@ -1550,6 +1729,11 @@ pub struct ChatRagRequest<'a> {
     /// capability decision, never a consequence of how the caller
     /// transports the answer.
     pub toolbox: Option<&'a ToolBox<'a>>,
+    /// The turn's `[#N]` numbering, shared with whatever the toolbox's
+    /// `search` runs through. The caller owns it because the caller built
+    /// the tool runner: both sides have to write into the same one or the
+    /// numbers mean two different things (see [`CitationLedger`]).
+    pub ledger: &'a Mutex<CitationLedger>,
 }
 
 /// Single-turn RAG: retrieve from the store, then ask the provider to
@@ -1566,18 +1750,23 @@ pub async fn run_chat_rag(
         history,
         opts,
         toolbox,
+        ledger,
     } = req;
     let t_ret = std::time::Instant::now();
     let context = retrieve_context(store, embedder, repo_root, query, &opts).await?;
     let retrieval_ms = t_ret.elapsed().as_millis();
 
-    let mut messages = build_rag_messages(
-        query,
-        &context,
-        history,
-        opts.system_prompt,
-        opts.max_context_chars,
-    );
+    let mut messages = {
+        let mut l = ledger.lock().expect("citation ledger poisoned");
+        build_rag_messages(
+            query,
+            &context,
+            history,
+            opts.system_prompt,
+            opts.max_context_chars,
+            &mut l,
+        )
+    };
 
     let fast = opts.fast.then(|| fast_client(chat)).flatten();
     let chat = fast.as_ref().unwrap_or(chat);
@@ -1609,6 +1798,7 @@ pub async fn run_chat_rag(
     Ok(ChatRagOutcome {
         answer,
         reasoning: String::new(),
+        citations: ledger.lock().expect("citation ledger poisoned").items().to_vec(),
         context,
         retrieval_ms,
         completion_ms,
@@ -1644,19 +1834,24 @@ where
         history,
         opts,
         toolbox,
+        ledger,
     } = req;
     let t_ret = std::time::Instant::now();
     let context = retrieve_context(store, embedder, repo_root, query, &opts).await?;
     let retrieval_ms = t_ret.elapsed().as_millis();
     on_context(&context);
 
-    let mut messages = build_rag_messages(
-        query,
-        &context,
-        history,
-        opts.system_prompt,
-        opts.max_context_chars,
-    );
+    let mut messages = {
+        let mut l = ledger.lock().expect("citation ledger poisoned");
+        build_rag_messages(
+            query,
+            &context,
+            history,
+            opts.system_prompt,
+            opts.max_context_chars,
+            &mut l,
+        )
+    };
 
     let fast = opts.fast.then(|| fast_client(chat)).flatten();
     let chat = fast.as_ref().unwrap_or(chat);
@@ -1695,6 +1890,7 @@ where
         return Ok(ChatRagOutcome {
             answer: d.content,
             reasoning: d.reasoning,
+            citations: ledger.lock().expect("citation ledger poisoned").items().to_vec(),
             context,
             retrieval_ms,
             completion_ms: t_cmp.elapsed().as_millis(),
@@ -1723,6 +1919,7 @@ where
     Ok(ChatRagOutcome {
         answer,
         reasoning,
+        citations: ledger.lock().expect("citation ledger poisoned").items().to_vec(),
         context,
         retrieval_ms,
         completion_ms,

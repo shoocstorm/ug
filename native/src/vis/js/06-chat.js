@@ -113,6 +113,14 @@
                                 cites = payload.citations || [];
                                 turn.context(cites, payload.retrieval_ms);
                                 break;
+                            // A `search` the model ran mid-turn extended the
+                            // evidence list. It arrives separately from
+                            // `context` so a later source does not rewrite
+                            // the progress line the reader is watching.
+                            case 'citations':
+                                cites = payload.citations || [];
+                                turn.cites(cites);
+                                break;
                             case 'tool':
                                 turn.tool(payload);
                                 break;
@@ -749,6 +757,12 @@
                         el.insertBefore(row, bodyEl);
                     }
                     if (nearBottom()) scroller.scrollTop = scroller.scrollHeight;
+                },
+                // More sources, same turn.
+                cites(list) {
+                    liveCites = list || [];
+                    citeCount = liveCites.length;
+                    stats();
                 },
                 reasoning(text) {
                     reasoningChars += text.length;

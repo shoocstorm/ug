@@ -151,19 +151,44 @@ const NODE_REF_FORMS: &str = "Accepts a node id, a plain symbol name, or a wildc
 /// Preset list for the tool description, each with the arguments it takes —
 /// `long_functions(min_loc)`. Naming the arguments is what stops a model
 /// inventing them, or borrowing `limit` from the wrong level.
-fn preset_signatures() -> String {
+/// The preset names, as a JSON Schema `enum` for `analyze.preset`.
+///
+/// A plain `"type": "string"` let the model write whatever a preset *might*
+/// plausibly be called, and it duly did: a real transcript opens with
+/// `{"preset": "boundary_kinds"}` — which is not a preset at all, it is a
+/// graph *property* that was sitting in the same paragraph of the tool
+/// description. An `enum` is the one part of a schema that constrained
+/// decoding enforces, so under vLLM / llama.cpp grammars an invented name
+/// stops being emittable rather than costing a round trip to find out.
+fn preset_names() -> Vec<Value> {
+    ultragraph::analyze::presets::all()
+        .iter()
+        .map(|p| Value::String(p.name.to_string()))
+        .collect()
+}
+
+/// The preset catalogue: one `name(params) — what it answers` line each.
+///
+/// `Preset::description` is written for an agent choosing between presets and
+/// was previously thrown away here, leaving the model to pick from 35 bare
+/// names. The signature is in the same line as the description so "which
+/// preset" and "what may I pass it" are one read, not two: the second
+/// failure in that same transcript was `{"preset": "boundaries", "args":
+/// {"kinds": [...]}}`, a parameter invented for a preset that declares none.
+fn preset_catalog() -> String {
     ultragraph::analyze::presets::all()
         .iter()
         .map(|p| {
-            if p.params.is_empty() {
+            let sig = if p.params.is_empty() {
                 p.name.to_string()
             } else {
                 let params: Vec<&str> = p.params.iter().map(|q| q.name).collect();
                 format!("{}({})", p.name, params.join(", "))
-            }
+            };
+            format!("{} — {}", sig, p.description)
         })
         .collect::<Vec<_>>()
-        .join(", ")
+        .join("\n")
 }
 
 /// Lift `analyze`'s own parameters out of `args`, where models keep
@@ -452,15 +477,21 @@ fn raw_tools() -> Value {
         {
             "name": "analyze",
             "description": format!(
-                "WHOLE-REPO STATISTICS over the indexed graph — counts, groups, distributions and blast radius. Use this for ANY question of the form 'how many', 'which are the biggest / longest / most depended-upon', 'what fraction', 'where is the worst X', 'what breaks if I change Y'. NEVER grep for a count and NEVER loop a per-file tool to build one: this answers in one call and ~100 tokens what reading the repo costs hundreds of thousands. Two ways to call it. (1) `preset` — a named question, the cheap path, e.g. {{\"preset\": \"long_functions\"}} or {{\"preset\": \"impact\", \"args\": {{\"target\": \"src/auth.ts\"}}}}. Available: {presets}. (2) `gql` — a raw OverGraph GQL (Cypher-shaped) query when no preset fits, e.g. \"MATCH (n:Function) WHERE n.loc > 50 AND n.is_test = 0 RETURN n.folder AS folder, count(*) AS c ORDER BY c DESC\". Queryable properties: node_type, name, file, folder, loc, params, max_nesting, has_doc, is_test, in_degree, out_degree, qualified_name, route, annotations, start_line, end_line, boundary, boundary_in, boundary_out, boundary_kinds, boundary_protocols, boundary_detail — call graph_schema for their live population counts before relying on one. A *boundary* is where the system meets the outside world (a REST handler, a queue listener, a CLI command, an outbound HTTP or DB client); `boundary_impact` is the blast-radius question that matters before a change, because it reports which externally-visible contracts a change reaches rather than merely how many symbols move. Booleans are stored as 0/1 so they can be summed: documented fraction is sum(n.has_doc)/count(*). Read-only; it cannot modify the index. Every answer states its coverage denominators — treat a 'NOT INDEXED' warning as meaning the number is about nothing.",
-                presets = preset_signatures()
+                "WHOLE-REPO STATISTICS over the indexed graph — counts, groups, distributions and blast radius. Use this for ANY question of the form 'how many', 'which are the biggest / longest / most depended-upon', 'what fraction', 'where is the worst X', 'what breaks if I change Y'. NEVER grep for a count and NEVER loop a per-file tool to build one: this answers in one call and ~100 tokens what reading the repo costs hundreds of thousands. Two ways to call it. (1) `preset` — a named question, the cheap path, e.g. {{\"preset\": \"long_functions\"}} or {{\"preset\": \"impact\", \"args\": {{\"target\": \"src/auth.ts\"}}}}. The catalogue is the `preset` parameter's own enum, with what each one answers — read it there and pick a name from it; a name that is not in that list is not a preset, however plausible it sounds. (2) `gql` — a raw OverGraph GQL (Cypher-shaped) query when no preset fits, e.g. \"MATCH (n:Function) WHERE n.loc > 50 AND n.is_test = 0 RETURN n.folder AS folder, count(*) AS c ORDER BY c DESC\"; the properties you can query are listed on that parameter. A *boundary* is where the system meets the outside world (a REST handler, a queue listener, a CLI command, an outbound HTTP or DB client); `boundary_impact` is the blast-radius question that matters before a change, because it reports which externally-visible contracts a change reaches rather than merely how many symbols move. Booleans are stored as 0/1 so they can be summed: documented fraction is sum(n.has_doc)/count(*). Read-only; it cannot modify the index. Every answer states its coverage denominators — treat a 'NOT INDEXED' warning as meaning the number is about nothing.",
             ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "preset": { "type": "string", "description": "Name of a built-in question to run. Cheapest path — prefer this over writing GQL. See the description for the list, or call graph_schema." },
-                    "gql": { "type": "string", "description": "Raw OverGraph GQL, when no preset fits. Aggregates: count, sum, avg, min, max, collect (no percentile — a collect() column is summarised as p50/p90/p99 in the output). Supports CASE, WITH … WHERE as HAVING, EXISTS { … } (needs its own RETURN clause inside), UNION, STARTS WITH / ENDS WITH / CONTAINS, and bounded variable-length paths. Every variable-length path needs a finite bound (*1..3, never *) and unanchored walks past 2 hops can exceed the traversal cap. Parenthesise negated membership: NOT (x IN [...])." },
-                    "args": { "type": "object", "description": "Arguments for the chosen preset ONLY — the names in its signature above, e.g. {\"target\": \"src/auth.ts\"} or {\"min_loc\": 100}. Paging is not a preset argument: `limit` and `range` are top-level parameters, siblings of `preset`, never keys in here. An argument the preset does not declare is an error, not an ignored key." },
+                    "preset": {
+                        "type": "string",
+                        "enum": preset_names(),
+                        "description": format!(
+                            "Name of a built-in question to run. Cheapest path — prefer this over writing GQL. Pick one of these exactly; the parenthesised names are the ONLY keys that preset accepts in `args`, and a preset shown without parentheses takes no `args` at all:\n{catalog}",
+                            catalog = preset_catalog()
+                        ),
+                    },
+                    "gql": { "type": "string", "description": "Raw OverGraph GQL, when no preset fits. Queryable node properties (these are PROPERTIES, not preset names — they are only valid inside a gql string): node_type, name, file, folder, loc, params, max_nesting, has_doc, is_test, in_degree, out_degree, qualified_name, route, annotations, start_line, end_line, boundary, boundary_in, boundary_out, boundary_kinds, boundary_protocols, boundary_detail — call graph_schema for their live population counts before relying on one. Aggregates: count, sum, avg, min, max, collect (no percentile — a collect() column is summarised as p50/p90/p99 in the output). Supports CASE, WITH … WHERE as HAVING, EXISTS { … } (needs its own RETURN clause inside), UNION, STARTS WITH / ENDS WITH / CONTAINS, and bounded variable-length paths. Every variable-length path needs a finite bound (*1..3, never *) and unanchored walks past 2 hops can exceed the traversal cap. Parenthesise negated membership: NOT (x IN [...])." },
+                    "args": { "type": "object", "description": "Arguments for the chosen preset ONLY — the names inside that preset's parentheses in the `preset` catalogue, e.g. {\"target\": \"src/auth.ts\"} or {\"min_loc\": 100}. A preset listed there WITHOUT parentheses takes no arguments; omit this. An argument the preset does not declare is an error, not an ignored key. Paging is not a preset argument either: `limit` and `range` are top-level parameters, siblings of `preset`, never keys in here." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "How many rows to display (default 20). Shorthand for range \"1-N\"." },
                     "range": { "type": "string", "description": "Which window of rows to show, 1-based and inclusive at both ends: \"20\" (top 20), \"11-35\", \"34-end\". Use this to page through a result you already ran instead of re-running with a bigger limit and re-reading rows you have seen — the window is applied to rows the query already produced, so every reported total stays the same. The output states which rows it is showing and names the exact range to ask for next." }
                 }
@@ -584,13 +615,65 @@ mod tests {
     /// Models invent argument names when the description only lists presets,
     /// so every preset that takes arguments must advertise them.
     #[test]
-    fn preset_signatures_name_their_arguments() {
-        let sigs = preset_signatures();
-        assert!(sigs.contains("long_functions(min_loc)"), "{sigs}");
-        assert!(sigs.contains("impact(target)"), "{sigs}");
-        // A preset without parameters stays bare — no empty parens.
-        assert!(sigs.contains("repo_census,") || sigs.ends_with("repo_census"), "{sigs}");
-        assert!(!sigs.contains("()"), "{sigs}");
+    fn the_preset_catalog_names_arguments_and_says_what_each_answers() {
+        let cat = preset_catalog();
+        assert!(cat.contains("long_functions(min_loc) — "), "{cat}");
+        assert!(cat.contains("impact(target) — "), "{cat}");
+        // A preset without parameters stays bare — no empty parens, because
+        // `foo()` reads as "takes arguments, I just don't know which".
+        assert!(!cat.contains("()"), "{cat}");
+        assert!(cat.contains("repo_census — "), "{cat}");
+        // The description is the half that lets a model choose; dropping it
+        // is what left it picking from 35 bare names.
+        for line in cat.lines() {
+            assert!(line.contains(" — "), "every preset needs its one-liner: {line}");
+        }
+    }
+
+    /// The `preset` slot must be closed, not free text.
+    ///
+    /// A real transcript opened with `{"preset": "boundary_kinds"}` — a graph
+    /// *property* the tool description happened to list two sentences away —
+    /// then `{"preset": "boundaries", "args": {"kinds": [...]}}` on a preset
+    /// that declares no arguments. Two of four calls spent before the first
+    /// real answer. An enum is the part of a schema constrained decoding
+    /// actually enforces.
+    #[test]
+    fn the_preset_parameter_is_an_enum_of_real_presets() {
+        let tools = tool_list();
+        let analyze = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "analyze")
+            .expect("analyze is advertised");
+        let preset = &analyze["inputSchema"]["properties"]["preset"];
+        let names: Vec<&str> = preset["enum"]
+            .as_array()
+            .expect("preset must be an enum, or the model may invent one")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names.len(),
+            ultragraph::analyze::presets::all().len(),
+            "the enum is generated from the registry, so it cannot drift from it"
+        );
+        assert!(names.contains(&"boundaries") && names.contains(&"boundary_census"));
+        // The name the model actually invented, and the namespace it came
+        // from: a property is not a preset.
+        assert!(!names.contains(&"boundary_kinds"), "{names:?}");
+
+        // …and that namespace now lives on the parameter it belongs to.
+        let gql = analyze["inputSchema"]["properties"]["gql"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(gql.contains("boundary_kinds"), "gql owns the property list");
+        let desc = analyze["description"].as_str().unwrap();
+        assert!(
+            !desc.contains("boundary_kinds"),
+            "the property list must not sit beside the preset list again"
+        );
     }
 
     #[test]

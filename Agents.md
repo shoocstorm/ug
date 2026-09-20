@@ -1955,6 +1955,67 @@ Two consequences, both of which will bite again:
   `python3 -c "print(repr(line))"` shows it. Before changing any string
   literal in a vis part, check what is actually in it.
 
+### 11e. A `[#N]` that restarts is a citation that lies
+
+`chat::render_context` numbered from `[#1]` on every call, and a turn calls it
+once for the seed pack and once per `search` the model runs. Both blocks then
+claimed `[#1]`, `[#2]`, `[#3]` in one conversation. The model cited a number
+that meant two different nodes, and the chip the reader clicked resolved
+against whichever one the seed pack had put there.
+
+**The failure got worse the better the model behaved.** Only a turn that took
+`TOOL_SYSTEM_SUFFIX`'s advice — rewrite the query, search again — could hit it;
+a lazy turn that answered from the first pass was always correct. Every unit
+test passed throughout, because each render was individually right.
+
+The rule this leaves: **a numbering that is handed to a model is turn state,
+not a rendering detail.** It belongs to something that outlives the call
+(`CitationLedger`), which is also the only place that can answer "what is this
+answer allowed to cite" — the seed pack alone was the wrong answer to that the
+moment the toolbox shipped. `render_context` was deleted rather than kept
+alongside: a function that numbers from 1 with no ledger is the bug, available
+to be called again.
+
+Second-order rule, same incident: **only register what you rendered.** The
+char budget drops the tail of a pack, and an item the model was never shown
+must not appear in the source list the reader is told the answer rests on.
+
+### 11f. A tool slot the model may fill freely will be filled wrongly
+
+One transcript, four `analyze` calls, two of them wasted:
+`{"preset": "boundary_kinds"}` — not a preset, a graph *property* that sat two
+sentences away in the same tool description — then
+`{"preset": "boundaries", "args": {"kinds": [...]}}`, an argument invented for
+a preset that declares none.
+
+Neither was a weak model. `preset` was `{"type": "string"}` with the catalogue
+buried in prose, beside an unrelated list of property names, and
+`preset_signatures()` threw away each preset's own one-line description — so
+the model chose from 35 bare names sitting next to 21 plausible-looking
+non-names.
+
+Three rules, in order of leverage:
+
+1. **A closed set goes in `enum`.** It is the one part of a JSON Schema that
+   constrained decoding enforces: under vLLM / llama.cpp grammars an invented
+   name stops being emittable instead of costing a round trip to discover.
+   Generate it from the registry so it cannot drift.
+2. **One namespace per parameter.** Preset names belong on `preset`, queryable
+   properties on `gql`. Two namespaces in one paragraph is where
+   `boundary_kinds` came from, and the schema is what the model reads most
+   carefully.
+3. **Ship the descriptions you already wrote.** `Preset::description` is
+   documented as "written for an agent choosing between presets" and was being
+   discarded at the one point an agent chooses. Cost of putting it back: ~865
+   tokens in the tool block, cached after the first request. Cost of leaving it
+   out: two full completions per confused turn, which on a local endpoint is
+   the whole latency budget.
+
+This is the same instinct as `normalize_args` and `hoist_own_params` in
+`mcp/tools.rs`: **a model's malformed call is design feedback about the
+schema, not a user error to reject.** Prefer making the wrong call impossible
+to emit over making it a good error message.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

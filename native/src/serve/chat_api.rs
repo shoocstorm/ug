@@ -1,7 +1,7 @@
 //! `chat_api.rs` — split out of `serve.rs`; see `docs/dev/REFACTOR-TRACKING.md`.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::extract::{Json, State};
 use axum::http::StatusCode;
@@ -375,17 +375,24 @@ pub(crate) async fn api_chat(
     let dest_name = db.backend_name();
     let repo_root = state.repo_root();
 
+    // One `[#N]` namespace for the whole turn: the seed pack takes the first
+    // numbers and the toolbox's `search` continues them (see
+    // `chat::CitationLedger`).
+    let ledger = Arc::new(Mutex::new(chat::CitationLedger::new()));
+
     // The same toolbox the streaming path builds: `stream` picks how the
     // answer is delivered, not whether the model may consult the graph.
     let tool_state = state.clone();
     let tool_db = db.clone();
     let tool_embedder = Some(embedder.clone());
+    let tool_ledger = ledger.clone();
     let runner = move |name: &str, args: serde_json::Value| {
         let state = tool_state.clone();
         let db = tool_db.clone();
         let embedder = tool_embedder.clone();
+        let ledger = tool_ledger.clone();
         let name = name.to_string();
-        Box::pin(async move { run_chat_tool(state, db, embedder, name, args).await })
+        Box::pin(async move { run_chat_tool(state, db, embedder, name, args, ledger).await })
             as futures::future::BoxFuture<'static, Result<String, String>>
     };
     let toolbox = body.tools.unwrap_or(true).then(|| chat::ToolBox {
@@ -404,13 +411,17 @@ pub(crate) async fn api_chat(
         history: &history_owned,
         opts,
         toolbox: toolbox.as_ref(),
+        ledger: &ledger,
     })
     .await;
     drop(_permit);
 
     match outcome {
         Ok(o) => {
-            let citations = citations_json(&o.context.items);
+            // Everything the answer was allowed to cite, not just what the
+            // first retrieval guessed at: a turn that re-searched found the
+            // rest of its evidence through the toolbox.
+            let citations = citations_json(&o.citations);
             let body_json = serde_json::json!({
                 "query": body.query,
                 "answer": o.answer,
@@ -508,17 +519,23 @@ pub(crate) fn api_chat_stream(
 
         emit("phase", serde_json::json!({ "phase": "retrieving" }));
 
+        // One `[#N]` namespace for the whole turn (see the non-streaming
+        // path, and `chat::CitationLedger`).
+        let ledger = Arc::new(Mutex::new(chat::CitationLedger::new()));
+
         // Hand the model the graph toolbox so it can chase what retrieval
         // only pointed at — call sites, outlines, exact source, paths.
         let tool_state = state.clone();
         let tool_db = db.clone();
         let tool_embedder = Some(embedder.clone());
+        let tool_ledger = ledger.clone();
         let runner = move |name: &str, args: serde_json::Value| {
             let state = tool_state.clone();
             let db = tool_db.clone();
             let embedder = tool_embedder.clone();
+            let ledger = tool_ledger.clone();
             let name = name.to_string();
-            Box::pin(async move { run_chat_tool(state, db, embedder, name, args).await })
+            Box::pin(async move { run_chat_tool(state, db, embedder, name, args, ledger).await })
                 as futures::future::BoxFuture<'static, Result<String, String>>
         };
         let toolbox = if body.tools.unwrap_or(true) {
@@ -536,6 +553,11 @@ pub(crate) fn api_chat_stream(
         let emit_ctx = emit;
         let emit_tool = emit;
         let emit_delta = emit;
+        // A `search` the model runs mid-turn adds to the evidence list. The
+        // reader is looking at that list while the answer is still being
+        // written, so publish it as it grows rather than only at the end.
+        let cite_ledger = ledger.clone();
+        let mut sent_cites = 0usize;
         let outcome = chat::run_chat_rag_stream(
             chat::ChatRagRequest {
                 store: &*db,
@@ -546,6 +568,7 @@ pub(crate) fn api_chat_stream(
                 history: &history_owned,
                 opts,
                 toolbox: toolbox.as_ref(),
+                ledger: &ledger,
             },
             |ctx| {
                 emit_ctx(
@@ -569,6 +592,14 @@ pub(crate) fn api_chat_stream(
                         "result": t.result,
                     }),
                 );
+                let grown = {
+                    let l = cite_ledger.lock().expect("citation ledger poisoned");
+                    (l.len() > sent_cites).then(|| citations_json(l.items()))
+                };
+                if let Some(citations) = grown {
+                    sent_cites = citations.len();
+                    emit_tool("citations", serde_json::json!({ "citations": citations }));
+                }
             },
             |d| {
                 let mut obj = serde_json::Map::new();
@@ -832,6 +863,16 @@ pub(crate) async fn api_chat_config(State(state): State<ServeState>) -> Response
                     "label": "Char-budgeted context pack",
                     "detail": "Top nodes are hydrated with their descriptions and source snippets, then trimmed to the context budget and numbered [#1], [#2] … for citation.",
                 },
+                // Naming this stage because its absence is what the three
+                // above read as: a panel that stops at the pack describes a
+                // pipeline that answers from one pass, and that is not what
+                // runs. The model gets the toolbox and is told the pack is a
+                // starting point (see `tool_suffix`).
+                {
+                    "id": "agentic",
+                    "label": "The model searches again if the pack is thin",
+                    "detail": "That pack is where the turn starts, not where it ends. The model can rewrite your question into the vocabulary the codebase actually uses and search again, or go straight to call sites, file outlines and exact source. Anything a re-search returns continues the SAME [#1], [#2] … run, so what it found is citable and lands in the source list beside the first pass.",
+                },
             ],
             "defaults": {
                 "k": 8,
@@ -864,6 +905,7 @@ async fn run_chat_tool(
     embedder: Option<Arc<Embedder>>,
     name: String,
     args: serde_json::Value,
+    ledger: Arc<Mutex<chat::CitationLedger>>,
 ) -> Result<String, String> {
     let snap = state.snapshot();
     let ctx = state.active();
@@ -875,6 +917,7 @@ async fn run_chat_tool(
         ctx.repo_root.as_path(),
         &*db,
         embedder.as_deref(),
+        &ledger,
     )
     .await
 }
@@ -1111,18 +1154,26 @@ pub(crate) fn api_tour_stream(
             body.edge_types.clone().filter(|v| !v.is_empty());
         let opts = tour_opts_from_body(&body, edge_types_owned.as_deref());
 
+        // A tour narrates its own stops rather than citing [#N], so its
+        // ledger is write-only — it exists because `search` numbers through
+        // one, and a tour that searches twice must not restart the numbers
+        // inside its own transcript either.
+        let ledger = Arc::new(Mutex::new(chat::CitationLedger::new()));
+
         // Same graph toolbox chat gets, so a tour can look past the nodes
         // retrieval happened to surface. Off unless asked for: every tool
         // round is another wait before the first stop.
         let tool_state = state.clone();
         let tool_db = db.clone();
         let tool_embedder = Some(embedder.clone());
+        let tool_ledger = ledger.clone();
         let runner = move |name: &str, args: serde_json::Value| {
             let state = tool_state.clone();
             let db = tool_db.clone();
             let embedder = tool_embedder.clone();
+            let ledger = tool_ledger.clone();
             let name = name.to_string();
-            Box::pin(async move { run_chat_tool(state, db, embedder, name, args).await })
+            Box::pin(async move { run_chat_tool(state, db, embedder, name, args, ledger).await })
                 as futures::future::BoxFuture<'static, Result<String, String>>
         };
         let toolbox = opts.research.then(|| chat::ToolBox {

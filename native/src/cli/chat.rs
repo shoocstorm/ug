@@ -204,10 +204,19 @@ pub(crate) fn run_chat(args: &[String]) {
         // The same graph toolbox the UI and MCP clients get, so a terminal
         // answer is reached the same way as one in the browser. `--no-tools`
         // opts out; a project without a graph.json simply has none.
+        // One `[#N]` namespace per turn, shared with the toolbox's `search`
+        // so a re-search extends the evidence list instead of restarting it
+        // (`chat::CitationLedger`). The REPL resets it between turns.
+        let ledger = std::sync::Arc::new(std::sync::Mutex::new(chat::CitationLedger::new()));
         let runner = if no_tools {
             None
         } else {
-            Some(cli_tool_runner(args, store.clone(), embedder.clone()))
+            Some(cli_tool_runner(
+                args,
+                store.clone(),
+                embedder.clone(),
+                ledger.clone(),
+            ))
         };
         let toolbox = runner.as_ref().map(|run| chat::ToolBox {
             schemas: crate::mcp::tools::openai_tool_schemas(),
@@ -248,6 +257,7 @@ pub(crate) fn run_chat(args: &[String]) {
                         history: &[],
                         opts: opts_factory(&q),
                         toolbox: toolbox.as_ref(),
+                        ledger: &ledger,
                     })
                     .await
                     {
@@ -277,6 +287,7 @@ pub(crate) fn run_chat(args: &[String]) {
                             history: &[],
                             opts: opts_factory(&q),
                             toolbox: toolbox.as_ref(),
+                            ledger: &ledger,
                         },
                         show_context,
                     )
@@ -303,6 +314,7 @@ pub(crate) fn run_chat(args: &[String]) {
                     repo_root.as_path(),
                     opts_factory,
                     toolbox.as_ref(),
+                    &ledger,
                     show_context,
                     no_stream,
                 )
@@ -322,6 +334,7 @@ fn cli_tool_runner(
     args: &[String],
     store: std::sync::Arc<dyn KnowledgeStore>,
     embedder: std::sync::Arc<Embedder>,
+    ledger: std::sync::Arc<std::sync::Mutex<chat::CitationLedger>>,
 ) -> impl Fn(&str, serde_json::Value) -> futures::future::BoxFuture<'static, Result<String, String>>
 {
     // `run_chat` has not been converted to `CliResult` yet, so the graph
@@ -341,6 +354,7 @@ fn cli_tool_runner(
         let graph_path = graph_path.clone();
         let store = store.clone();
         let embedder = embedder.clone();
+        let ledger = ledger.clone();
         Box::pin(async move {
             // Dispatch is shared with `POST /api/chat` — see
             // `chat::run_chat_tool`. Only the handles differ.
@@ -352,6 +366,7 @@ fn cli_tool_runner(
                 repo_root.as_path(),
                 &*store,
                 Some(&embedder),
+                &ledger,
             )
             .await
         }) as futures::future::BoxFuture<'static, Result<String, String>>
@@ -360,8 +375,7 @@ fn cli_tool_runner(
 
 fn chat_outcome_to_json(query: &str, outcome: &chat::ChatRagOutcome) -> serde_json::Value {
     let citations: Vec<serde_json::Value> = outcome
-        .context
-        .items
+        .citations
         .iter()
         .enumerate()
         .map(|(i, it)| {
@@ -443,7 +457,7 @@ fn print_chat_outcome(query: &str, outcome: &chat::ChatRagOutcome, show_context:
     println!("{C_BOLD}{C_CYAN}❯ Query:{C_RESET} {}", query);
     println!();
     if show_context {
-        print_context_items(&outcome.context.items);
+        print_context_items(&outcome.citations);
     }
     println!("{C_BOLD}{C_GREEN}Answer:{C_RESET}");
     println!("{}", outcome.answer.trim_end());
@@ -530,6 +544,7 @@ async fn run_chat_repl<'a, F>(
     repo_root: &std::path::Path,
     mut opts_factory: F,
     toolbox: Option<&chat::ToolBox<'_>>,
+    ledger: &std::sync::Mutex<chat::CitationLedger>,
     show_context: bool,
     no_stream: bool,
 ) where
@@ -594,6 +609,9 @@ async fn run_chat_repl<'a, F>(
         }
 
         let opts = opts_factory(q);
+        // A new question is a new [#N] run: the context block is rebuilt from
+        // scratch each turn, so the numbers in it have to start at 1 again.
+        ledger.lock().expect("citation ledger poisoned").reset();
         let outcome = if no_stream {
             match chat::run_chat_rag(chat::ChatRagRequest {
                 store,
@@ -604,6 +622,7 @@ async fn run_chat_repl<'a, F>(
                 history: &history,
                 opts,
                 toolbox,
+                ledger,
             })
             .await
             {
@@ -630,6 +649,7 @@ async fn run_chat_repl<'a, F>(
                     history: &history,
                     opts,
                     toolbox,
+                    ledger,
                 },
                 show_ctx,
             )
