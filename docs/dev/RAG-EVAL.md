@@ -156,6 +156,67 @@ Two ways out, best first:
    pools the rows; the spread shrinks by √R. Cheaper to write, far more
    expensive to run — a 3-pass agentic run is ~15 minutes.
 
+## A second kind of question — the analytic probe set
+
+The twelve fixture questions are all *"where is the code that does X"*, graded
+by whether a known node id reached the citation list. **A whole class of real
+question is not that shape**, and it is the class the tool schemas exist for:
+
+> which methods are longer than 150 lines and have no comments/doc?
+
+Its answer is a *set*, not a node, and reaching it means combining two
+predicates no single preset expresses. That is where the loop was observed
+running the same `analyze long_functions min_loc=150` call twice, because the
+preset could only say half of what was asked and repeating it was the nearest
+thing to progress. (Fixed since: an exact repeat is served from a memo and the
+model is told why repeating cannot help.)
+
+These ten probe the same shape. Every verification query below was run against
+`~/.ug/ug` and its answer is recorded, so a run can be marked right or wrong
+without re-deriving the truth — the §11a trap is a script that replays
+production logic and drifts from it.
+
+| # | Ask this | What it probes | Verify with | Answer here |
+| :-: | :--- | :--- | :--- | ---: |
+| 1 | Which functions are over 150 lines with no doc comment? | the original: two predicates, no preset | `WHERE n.loc >= 150 AND n.has_doc = 0 AND n.is_test = 0` | 23 |
+| 2 | What's undocumented but called from more than five places? | magnitude + absence; must not confuse `in_degree` with callers of the file | `WHERE n.has_doc = 0 AND n.in_degree > 5 AND n.is_test = 0` | 94 |
+| 3 | Which of our public entry points have no documentation? | must find `boundary` rather than guessing at "public" | `WHERE n.has_doc = 0 AND n.is_test = 0 AND n.boundary = 1` | 93 |
+| 4 | Show me functions taking five or more parameters that nobody documented. | `param_bloat` exists but not with the doc half | `WHERE n.params >= 5 AND n.has_doc = 0` | 47 |
+| 5 | Is there code that is long, deeply nested *and* has no comments at all? | three predicates; `undercommented_complexity` is close and its thresholds are wrong for this | `WHERE n.loc >= 100 AND n.max_nesting >= 4 AND n.has_comments = 0` | 2 |
+| 6 | How many functions does nothing reference, excluding tests and entry points? | must exclude boundaries or "dead code" includes every handler | `WHERE n.in_degree = 0 AND n.is_test = 0 AND n.boundary = 0` | 339 |
+| 7 | Which HTTP endpoints take more than three parameters? | **the empty answer.** None do — does it say so, or invent rows? | `WHERE n.boundary_kinds CONTAINS 'http.endpoint' AND n.params > 3` | 0 |
+| 8 | Which CLI commands has nobody tested? | two tools: `boundaries kind=cli.command`, then test reachability | `boundaries --arg kind=cli.command` + `untested_symbols` | — |
+| 9 | What would I have to re-test if I changed the indexer? | `retest_scope` / `impact` take a target — does it pass one, or scan? | `analyze retest_scope --arg target=native/src/indexer.rs` | — |
+| 10 | Which folder has the worst doc coverage for its size? | a preset **does** answer this — does it find `doc_coverage_by_folder`, or write GQL? | `analyze doc_coverage_by_folder` | — |
+
+### What to watch, beyond right or wrong
+
+The answers are mostly reachable; the interesting variable is **what it cost to
+get there**. Every turn now reports it:
+
+| Signal | Where | Bad looks like |
+| :--- | :--- | :--- |
+| Queries and rounds | the badge, and `tool_calls` / `tool_rounds` | four calls for a one-call question |
+| A repeat | tool row reads `repeat · ~N tokens` | it asked the same thing twice |
+| Ran out of budget | `hit_round_cap`, and the meta line says so | it answered under protest |
+| Sources | the citations list | **0 cited on a correct answer** — see the `analyze` provenance hole above |
+
+Question 7 is the one to read most carefully. An empty result set is where a
+model is most likely to fill the silence, and no amount of retrieval quality
+helps if the answer is invented.
+
+### Why these are not in the fixture
+
+They cannot be graded by `expect_any`: the answer is a count or a set, and
+there is no node id to reach for. Automating them needs a second grader —
+"does the answer contain this number" is the cheap version and is brittle
+against phrasing, "does the model's own GQL match the reference" is better and
+is a different harness. Until one exists these are a **manual probe set**: run
+them, read the badge and the tool rows, and record anything surprising here.
+
+They are also the better argument for widening the fixture (above). Twelve
+"where is X" questions measure one half of what the toolbox is for.
+
 #### Caveats that still apply
 
 - **`named` is a weak proxy and is inflated.** Several expected names are

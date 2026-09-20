@@ -746,6 +746,22 @@
                 if (hubs[0]) chips.push({ text: `How does ${hubs[0]} work?` });
                 if (hubs[1]) chips.push({ text: `What calls ${hubs[1]}?` });
                 chips.push({ text: docs ? 'What does this collection cover?' : 'What are the entry points?' });
+
+                // Questions about the base as a whole, rather than about one
+                // symbol in it. They belong to Answer and nowhere else: each
+                // needs two predicates combined, which is a tool call the
+                // model has to compose — Find would rank some prose about
+                // documentation and answer nothing.
+                //
+                // They are also the only starter that shows what the toolbox
+                // is for. Every chip here used to be "where is X", so a
+                // first-time reader had no way to discover that the base can
+                // be asked about itself.
+                if (!docs && askModeReady('answer').ok) {
+                    chips.push({ text: 'What is heavily used but undocumented?', mode: 'answer' });
+                    chips.push({ text: 'What does nothing reference any more?', mode: 'answer' });
+                }
+
                 if (files[0]) chips.push({ text: `Walk me through ${files[0]}` });
                 if (!docs) chips.push({ text: 'What talks to the outside world?' });
                 chips = chips.slice(0, ASK_SUGGEST_MAX);

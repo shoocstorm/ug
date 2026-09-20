@@ -293,8 +293,78 @@ must('clearing forgets the highlighted row', S.state.askCursor === -1);
 must('clearing takes the old matches off the canvas',
     Array.isArray(S.seenMatches()) && S.seenMatches().length === 0);
 
+// ── 4. What the bar suggests before you type ─────────────────────────────────
+//
+// Every starter chip used to be "where is X" — `How does foo work?`, `What
+// calls bar?`. A first-time reader had no way to discover that the base can be
+// asked about *itself*, which is the half of the toolbox that needs a tool
+// call composed rather than a search ranked. Those chips must go to Answer:
+// in Find they rank some prose about documentation and answer nothing.
+
+console.log('suggesting what to ask');
+
+const suggestMod = write('suggest.mjs', `
+    const ASK_SUGGEST_MAX = ${(askSrc.match(/const ASK_SUGGEST_MAX = (\d+);/) || [, 5])[1]};
+    let chatReady = true;
+    export function setChatReady(v) { chatReady = v; }
+    function askModeReady(mode) {
+        return { ok: mode === 'answer' ? chatReady : true, why: '' };
+    }
+    function topByDegree() { return []; }
+    function askEl() { return box; }
+    function focusAsk() {}
+    function submitAsk() {}
+    const box = {
+        innerHTML: '', children: [],
+        appendChild(k) { this.children.push(k); return k; },
+    };
+    const document = {
+        createElement: () => ({
+            className: '', textContent: '', type: '',
+            addEventListener() {}, appendChild(k) { return k; },
+        }),
+    };
+    export function chipsFor(overview) {
+        box.children = [];
+        renderAskSuggestions(overview);
+        return box.children.map(c => c.textContent).filter(Boolean);
+    }
+    ${lift(askSrc, 'renderAskSuggestions')}
+`);
+const G = await import(suggestMod);
+
+const OVERVIEW = {
+    kb_type: 'code',
+    hotspots: [{ name: 'index_with_cache' }, { name: 'search_kb' }],
+    biggest_files: [{ name: 'indexer.rs' }],
+};
+const withModel = G.chipsFor(OVERVIEW);
+
+must('the starters still lead with this base\'s own names',
+    withModel.some(t => t.includes('index_with_cache')));
+must('a question about the base as a whole is offered',
+    withModel.includes('What is heavily used but undocumented?'));
+must('so is the one that finds code nothing uses',
+    withModel.includes('What does nothing reference any more?'));
+must('the chip list stays within its cap', withModel.length - 1 <= 5);
+
+// Without a model those two cannot be answered at all, so offering them is
+// offering a dead end.
+G.setChatReady(false);
+const noModel = G.chipsFor(OVERVIEW);
+must('no whole-base question without a model to answer it',
+    !noModel.some(t => t.includes('undocumented') || t.includes('nothing reference')));
+must('the name-shaped starters survive without a model',
+    noModel.some(t => t.includes('index_with_cache')));
+G.setChatReady(true);
+
+// A document collection has no functions to be undocumented.
+const docsOnly = G.chipsFor({ kb_type: 'docs', hotspots: [{ name: 'Onboarding' }] });
+must('a document base is not asked about undocumented functions',
+    !docsOnly.some(t => t.includes('undocumented')));
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0
-    ? 'the ask bar classifies and renders as specified'
+    ? 'the ask bar classifies, renders and suggests as specified'
     : `${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

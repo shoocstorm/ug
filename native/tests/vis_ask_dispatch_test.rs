@@ -55,7 +55,7 @@ fn the_ask_bar_classifies_and_renders_as_specified() {
     let (ok, text) = run();
     assert!(ok, "ask bar check failed:\n{text}");
     assert!(
-        text.contains("the ask bar classifies and renders as specified"),
+        text.contains("the ask bar classifies, renders and suggests as specified"),
         "the harness did not report its checks:\n{text}"
     );
     // The halves are independently breakable, so all of them have to have run
@@ -80,5 +80,12 @@ fn the_ask_bar_classifies_and_renders_as_specified() {
     assert!(
         text.contains("keeping one question in the stream"),
         "the stream checks must run:\n{text}"
+    );
+    // The starters are the only place a first-time reader learns the base can
+    // be asked about itself, and a chip that needs a model it does not have
+    // is a dead end offered as a suggestion.
+    assert!(
+        text.contains("suggesting what to ask"),
+        "the starter-chip checks must run:\n{text}"
     );
 }
