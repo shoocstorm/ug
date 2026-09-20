@@ -565,7 +565,7 @@ pub fn print_serve_help() {
         "  {C_CYAN}--max-tokens{C_RESET} <n>        Default max completion tokens (default: 1024)"
     );
     println!(
-        "  {C_CYAN}--chat-timeout{C_RESET} <secs>   HTTP timeout for chat calls (default: 180)"
+        "  {C_CYAN}--chat-timeout{C_RESET} <secs>   HTTP timeout for chat calls (default: 900)"
     );
     println!("    Env fallbacks: UG_CHAT_MODEL, UG_CHAT_BASE_URL, UG_CHAT_API_KEY");
     println!();

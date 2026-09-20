@@ -398,7 +398,10 @@ pub(crate) async fn api_chat(
     let toolbox = body.tools.unwrap_or(true).then(|| chat::ToolBox {
         schemas: crate::mcp::tools::openai_tool_schemas(),
         run: &runner,
-        max_rounds: body.max_tool_rounds.unwrap_or(4).min(8),
+        max_rounds: body
+                    .max_tool_rounds
+                    .unwrap_or(chat::DEFAULT_TOOL_ROUNDS)
+                    .min(chat::MAX_TOOL_ROUNDS),
         max_result_chars: 6_000,
     });
 
@@ -429,6 +432,11 @@ pub(crate) async fn api_chat(
                 "seed_id": o.context.seed_id,
                 "retrieval_ms": o.retrieval_ms,
                 "completion_ms": o.completion_ms,
+                // Whether it finished looking or merely ran out of rounds —
+                // an answer written under protest reads exactly like a
+                // confident one unless it says so.
+                "tool_rounds": o.tool_rounds,
+                "hit_round_cap": o.hit_round_cap,
                 "usage": o.usage,
                 "dest": dest_name,
                 "chat_model": chat_client.config().model.clone(),
@@ -542,7 +550,10 @@ pub(crate) fn api_chat_stream(
             Some(chat::ToolBox {
                 schemas: crate::mcp::tools::openai_tool_schemas(),
                 run: &runner,
-                max_rounds: body.max_tool_rounds.unwrap_or(4).min(8),
+                max_rounds: body
+                    .max_tool_rounds
+                    .unwrap_or(chat::DEFAULT_TOOL_ROUNDS)
+                    .min(chat::MAX_TOOL_ROUNDS),
                 max_result_chars: 6_000,
             })
         } else {
@@ -625,6 +636,8 @@ pub(crate) fn api_chat_stream(
                     "retrieval_ms": o.retrieval_ms,
                     "completion_ms": o.completion_ms,
                     "tool_calls": o.tool_calls,
+                    "tool_rounds": o.tool_rounds,
+                    "hit_round_cap": o.hit_round_cap,
                     "usage": o.usage,
                     "dest": dest_name,
                     "chat_model": model,

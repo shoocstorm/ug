@@ -2016,6 +2016,90 @@ This is the same instinct as `normalize_args` and `hoist_own_params` in
 schema, not a user error to reject.** Prefer making the wrong call impossible
 to emit over making it a good error message.
 
+### 11g. The agentic layer was off, and the diagram could not have told you
+
+`/api/chat` attached twelve tools, appended a suffix telling the model to
+re-search, and capped it at four rounds. Over twelve questions it made **zero
+tool calls** — an answer byte-comparable to seed-only retrieval, reached a
+thousand times more slowly. The cause was one default three layers away:
+`ChatRagOptions::fast` is true, the UI sends `think: false`, both route through
+`fast_client`, and a model given no room to deliberate answers from whatever
+pack it was handed. Numbers and method: `docs/dev/RAG-EVAL.md`.
+
+Four rules, each of which cost something here:
+
+1. **A feature nothing measures is a feature you cannot claim.** "Agentic RAG"
+   was in the prompt, the schema, the `/api/chat/config` panel and the docs. It
+   was not in the behaviour, and every one of those surfaces described the
+   intent rather than the fact. Build the instrument before the improvement;
+   the first run is what tells you which thing to fix.
+2. **Measure against a control, not against the number you started from.**
+   Cited recall went 25 % → 67 %, which reads as a large accuracy win and is
+   not one: the control shows the answers were already naming the right symbol
+   8/12 times, uncited. What the loop bought was **provenance** — assertions
+   became checkable. Real, and a different claim.
+3. **Explain what you measured, not what you assume.** The first explanation
+   written into a comment here — "`enable_thinking: false` stops tool calls
+   being emitted" — was false; probing the endpoint directly showed all four
+   body variants returning tool calls. The observation (0 vs 4 on the same
+   question) held; the mechanism did not. A wrong mechanism in a comment is
+   worse than none, because the next person optimises against it.
+4. **Record the changes that did nothing.** Splitting the closed-book clauses
+   out of the system prompt, and printing `matched_by`/`hop` on each item, both
+   looked obviously right and both moved the number by exactly zero. They are
+   in `RAG-EVAL.md` under their own heading so the next audit does not
+   re-propose them as the fix — the same reason
+   `PERF-TUNING-JOURNEY.md` keeps a Rejected table.
+
+A fifth, specific to retrieval: **topical adjacency masquerades as relevance.**
+The packs that scored 0 were not thin or off-topic — they were the right file,
+the right module, the neighbouring functions, and not the answer. Any prompt
+that asks a model to re-search when results "look thin" is asking about a
+failure mode that does not occur.
+
+### 11h. Raising one timeout just moves the failure down a layer
+
+Making a chat turn agentic meant it now deliberates and calls tools in several
+rounds. Three independent ceilings stood between that turn and finishing, each
+sized for the single-completion turn that came before, none aware of the
+others. They were hit one at a time, each costing a measurement run:
+
+1. `chat::DEFAULT_TIMEOUT_SECS` — per HTTP request. Was 180 s.
+2. `chat::DEFAULT_TOOL_ROUNDS` — per turn. Was 4, and *half* the questions hit
+   it. "It finished" and "it ran out" had looked identical until `ToolRounds`
+   counted rounds separately from calls.
+3. nextest `slow-timeout = { period, terminate-after }` — per test process.
+
+**When you make an operation take longer, go and find every ceiling above it
+before running it once.** And scope the fix: the nextest override is
+`filter = 'test(rag_eval)'`, not a bigger global number, because that ceiling
+is a real stuck-test guard for the other 1 400 tests.
+
+A corollary for the cap specifically: **a limit set below ordinary usage is
+not a safety net, it is a silent truncation.** The ceiling that stops a
+confused model looping forever is worth having; 4 was not that ceiling, it was
+a number nobody had checked against what a turn actually uses.
+
+### 11i. Repeat the run before believing the delta
+
+Four changes were measured against a 12-question RAG fixture and three of them
+looked like wins. Then the final configuration was re-run **with no code
+change at all**: cited recall moved +2 questions, `named` moved −2, wall clock
+moved +64 s. Every effect claimed between those runs was smaller than that.
+
+The one real result — deliberation, cited 3/12 → ~8/12 — survived only because
+it was several times the spread and reproduced in both directions.
+
+So: **before reporting a delta, re-run the unchanged build.** A measurement
+whose noise you have not measured cannot support a claim about anything
+smaller than itself, and a monotone-looking series across single runs (8, 9,
+10, 11) is exactly what noise looks like when you are hoping. Where the spread
+is too wide to see the effect, say the effect is unmeasured and widen the
+fixture — do not narrate the trend.
+
+This is the sampling cousin of §10's rule about medians of five: the same
+discipline, applied to a model's output instead of a clock.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

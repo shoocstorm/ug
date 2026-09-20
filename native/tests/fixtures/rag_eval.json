@@ -1,0 +1,80 @@
+{
+  "project": "ug",
+  "note": "Ground truth for the Answer tab's retrieval, measured against this repo's own index. `expect_any` is a set of nodes any of which answers the question — retrieval is graded on reaching one of them, not on ranking them in a particular order. Node ids are `kind:file:name`; re-resolve one with `ug find_symbols <name>` if a rename breaks it.",
+  "questions": [
+    {
+      "q": "how does the chat turn stop one tool result from filling the whole context window",
+      "expect_any": ["function:native/src/chat.rs:clip_tool_result"]
+    },
+    {
+      "q": "what lets the model call graph tools before it writes an answer",
+      "expect_any": [
+        "function:native/src/chat.rs:run_tool_rounds",
+        "struct:native/src/chat.rs:ToolBox"
+      ]
+    },
+    {
+      "q": "how are vector hits and keyword hits combined into a single ranking",
+      "expect_any": [
+        "function:native/src/storage/query.rs:seeds_and_dense_ids",
+        "function:native/src/storage/query.rs:search_kb_ppr"
+      ]
+    },
+    {
+      "q": "how do I switch off a reasoning model's thinking on a local endpoint",
+      "expect_any": [
+        "function:native/src/chat.rs:no_think_body",
+        "function:native/src/chat.rs:fast_client"
+      ]
+    },
+    {
+      "q": "how does the MCP tool list become OpenAI function-calling schemas",
+      "expect_any": ["function:native/src/mcp/tools.rs:openai_tool_schemas"]
+    },
+    {
+      "q": "which store does an HTTP request read from when several destinations are configured",
+      "expect_any": ["function:native/src/serve/db_api.rs:pick_store"]
+    },
+    {
+      "q": "how does the code tell a dead chat endpoint apart from a model error",
+      "expect_any": ["function:native/src/chat.rs:ChatError::is_unreachable"]
+    },
+    {
+      "q": "where is the question embedded and searched before the graph walk runs",
+      "expect_any": [
+        "function:native/src/chat.rs:retrieve_context",
+        "function:native/src/storage/query.rs:search_kb_ppr",
+        "function:native/src/storage/query.rs:seeds_and_dense_ids"
+      ]
+    },
+    {
+      "q": "what repairs arguments a model sent in the wrong shape",
+      "expect_any": [
+        "function:native/src/mcp/tools.rs:normalize_args",
+        "function:native/src/mcp/tools.rs:hoist_own_params"
+      ]
+    },
+    {
+      "q": "how does an answer number its sources so they can be cited",
+      "expect_any": [
+        "struct:native/src/chat.rs:CitationLedger",
+        "function:native/src/chat.rs:render_item",
+        "function:native/src/chat.rs:build_rag_messages"
+      ]
+    },
+    {
+      "q": "what is the list of built-in analyze questions and where does each one's query live",
+      "expect_any": [
+        "function:native/src/mcp/tools.rs:preset_catalog",
+        "struct:native/src/analyze/presets.rs:Preset"
+      ]
+    },
+    {
+      "q": "how does a result get paged without running the query again",
+      "expect_any": [
+        "struct:native/src/analyze/range.rs:RowRange",
+        "function:native/src/analyze/range.rs:RowRange::first"
+      ]
+    }
+  ]
+}

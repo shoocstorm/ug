@@ -33,6 +33,10 @@ pub mod types;
 // had as sibling modules of the binary root.
 mod assets;
 mod chat;
+/// A dated, repeatable measurement of what a chat turn retrieves. Test-only,
+/// `#[ignore]`d, and it reads this machine's own index — see the module docs.
+#[cfg(test)]
+mod chat_eval;
 pub mod cli;
 mod config;
 pub mod git;

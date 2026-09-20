@@ -11,13 +11,14 @@
 //! (OpenAI, vLLM, llama.cpp, Ollama via the openai-compat shim, MLX
 //! server, etc).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use ultragraph::types::GraphData;
 use ultragraph::storage::{
     search_kb as storage_search_kb, ContextItem, DEFAULT_CONTEXT_CHARS, Direction, Embedder,
     KnowledgeStore, RankStrategy, RankedContext, SearchKbOptions,
@@ -31,7 +32,36 @@ pub const DEFAULT_CHAT_BASE_URL: &str = "http://127.0.0.1:8000/v1";
 pub const DEFAULT_CHAT_API_KEY: &str = "1234";
 pub const DEFAULT_TEMPERATURE: f32 = 0.2;
 pub const DEFAULT_MAX_TOKENS: u32 = 32768;
-pub const DEFAULT_TIMEOUT_SECS: u64 = 180;
+/// Long enough for a deliberating turn that calls tools.
+///
+/// 180 s was sized for one completion from a pack. A turn that deliberates and
+/// calls four tools is several completions plus the tool work between them,
+/// and it blew through 180 s mid-measurement (docs/dev/RAG-EVAL.md,
+/// 2026-09-20) — the request died, so the whole turn died, after two minutes
+/// of work the user had already waited for.
+///
+/// The cost of the larger number is bounded: a *dead* endpoint fails on
+/// connect and is reported immediately (`ChatError::is_unreachable`), so this
+/// only governs an endpoint that accepted the request and is still thinking.
+/// Waiting on that is what the user asked for.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 900;
+
+/// How many tool rounds a turn may spend before it must answer.
+///
+/// Was 4, chosen before anything counted how many a turn actually uses.
+/// Measured 2026-09-20 (docs/dev/RAG-EVAL.md): **half the questions hit the
+/// cap** — the loop was not finishing, it was being cut off, and an answer
+/// written under protest looks exactly like one the model was happy with.
+///
+/// The ceiling is what stops a confused model looping forever, so it stays;
+/// it is just no longer set below what an ordinary question needs. Rounds are
+/// sequential — each is a completion the user waits through — so this is a
+/// real latency ceiling too, which is why the calls *within* a round now run
+/// together (`run_round_calls`).
+pub const DEFAULT_TOOL_ROUNDS: usize = 8;
+
+/// Hard ceiling on `max_tool_rounds`, whatever a request asks for.
+pub const MAX_TOOL_ROUNDS: usize = 16;
 
 
 #[derive(Clone, Debug)]
@@ -589,12 +619,35 @@ fn parse_sse_line(line: &str) -> SseLine {
 
 /// System prompt used by both the CLI and `ug serve`. Tells the model
 /// to ground itself in the retrieved context and cite by `[#N]`.
+/// The prompt for a turn that **can** go looking.
+///
+/// What it was given and how to cite it — and nothing telling it to stay put.
+pub const SYSTEM_CORE: &str = "You are UltraGraph, a precise code/knowledge assistant. \
+You are given retrieved context items numbered [#1], [#2], ... drawn from a knowledge graph + vector \
+store over the user's repository. Cite the supporting items inline using their bracketed numbers \
+(e.g. \"see [#2]\"). Prefer concise, structured answers with code references and file paths when \
+relevant.";
+
+/// The prompt for a turn that **cannot**: [`SYSTEM_CORE`] plus the two
+/// closed-book sentences.
+///
+/// Those two sentences are right when there are no tools and actively wrong
+/// when there are, and they are the ones the model obeys: they arrive first
+/// and they are unambiguous, while [`TOOL_SYSTEM_SUFFIX`] arrives after and
+/// asks for a judgment call. Measured over 12 questions
+/// (`docs/dev/RAG-EVAL.md`, 2026-09-20): with these included the model made
+/// **zero** tool calls across all twelve and answered each from the first
+/// pack, which was wrong three times in four. "Say so plainly instead of
+/// guessing" is a virtue when looking is impossible and a failure when it is
+/// one call away.
+///
+/// `prompt_starts_from_the_same_core` pins the two to each other.
 pub const DEFAULT_SYSTEM_PROMPT: &str = "You are UltraGraph, a precise code/knowledge assistant. \
 You are given retrieved context items numbered [#1], [#2], ... drawn from a knowledge graph + vector \
-store over the user's repository. Answer the user's question using ONLY information present in those \
-items when possible. Cite the supporting items inline using their bracketed numbers (e.g. \"see [#2]\"). \
-If the answer is not in the context, say so plainly instead of guessing. Prefer concise, structured \
-answers with code references and file paths when relevant.";
+store over the user's repository. Cite the supporting items inline using their bracketed numbers \
+(e.g. \"see [#2]\"). Prefer concise, structured answers with code references and file paths when \
+relevant. Answer the user's question using ONLY information present in those items when possible. \
+If the answer is not in the context, say so plainly instead of guessing.";
 
 /// Appended to the system prompt when the model has the graph toolbox.
 ///
@@ -612,39 +665,44 @@ items don't already show completely:\n\
 - `find_symbols` to resolve a name you were given into a real node id.\n\
 - `search` to widen the net when the items look thin or off-topic.\n\
 - `shortest_path` / `traverse` to show how two things connect.\n\n\
-The items above were retrieved from the user's wording alone. If they look thin, off-topic, or miss \
-the part being asked about, REWRITE the query in the vocabulary the codebase actually uses and call \
-`search` again — swap plain words for likely symbol or file names, drop filler, try a synonym, or \
-split a compound question into separate searches. Searching two or three times with better wording \
-is normal and expected; answering from a poor first pass is not.\n\n\
+The items above were retrieved from the user's wording alone, and what they are is the \
+NEIGHBOURHOOD of the question — the right file, the right module, the functions next to the answer. \
+Being about the right area is not the same as containing the answer, and mistaking one for the other \
+is the single most common way this goes wrong: eight plausible items from exactly the right file, \
+none of which is the thing being asked about. A pack that looks good is not evidence that it is.\n\n\
+So before answering, name to yourself the specific symbol, file or behaviour the question is about, \
+and check that one of the items above actually IS that thing. If none of them is — even when they all \
+look relevant — do not answer from the nearest miss. REWRITE the query in the vocabulary the codebase \
+uses and call `search` again, or go straight to `find_symbols` with a wildcard for the name you expect \
+the thing to have. Each item says how it was reached (`semantic`/`keyword` match, and how many hops \
+out it is); items that are all several hops out are a neighbourhood, not an answer. Searching two or \
+three times with better wording is normal and expected.\n\n\
 Pass arguments as real JSON, not JSON inside a string: `\"nodeId\": \"function:src/a.rs:1:foo\"` for \
 one id, `\"nodeId\": [\"id1\", \"id2\"]` for several. Never `\"nodeId\": \"[\\\"id1\\\"]\"`.\n\n\
 Prefer one or two well-aimed calls over guessing. A `search` result is numbered in the SAME [#N] run \
 as the items above — it continues the list rather than restarting it, so cite what a search found by \
-its own number exactly as you cite the items above. Describe findings from the other tools in prose. \
-If the items already answer the question completely, just answer.";
+its own number exactly as you cite the items above. The other graph tools do the same: every node they \
+print carries its own [#N] beside its id, and a node you used to answer should be cited by that number \
+rather than merely described. If the items already answer the question completely, just answer.";
 
 /// One `[#n]` block: the header line, the description, the snippet.
 fn render_item(n: usize, item: &ContextItem) -> String {
-    let header = if item.start_line > 0 && item.end_line >= item.start_line {
-        format!(
-            "[#{}] {} ({}) — {}:{}-{}",
-            n,
-            item.name,
-            item.node_type,
-            if item.file.is_empty() { "<unknown>" } else { item.file.as_str() },
-            item.start_line,
-            item.end_line
-        )
+    let file = if item.file.is_empty() { "<unknown>" } else { item.file.as_str() };
+    let where_ = if item.start_line > 0 && item.end_line >= item.start_line {
+        format!("{}:{}-{}", file, item.start_line, item.end_line)
     } else {
-        format!(
-            "[#{}] {} ({}) — {}",
-            n,
-            item.name,
-            item.node_type,
-            if item.file.is_empty() { "<unknown>" } else { item.file.as_str() }
-        )
+        file.to_string()
     };
+    // How this item was reached, not just that it was. A pack of eight
+    // neighbours-of-neighbours looks identical to a pack of eight direct
+    // matches unless it says so, and the model is asked to tell them apart.
+    let how = match (item.matched_by.as_str(), item.hop) {
+        ("", 0) => String::new(),
+        ("", h) => format!(" · {h} hop(s) out"),
+        (m, 0) => format!(" · {m} match"),
+        (m, h) => format!(" · {m}, {h} hop(s) out"),
+    };
+    let header = format!("[#{}] {} ({}) — {}{}", n, item.name, item.node_type, where_, how);
 
     let mut block = String::with_capacity(header.len() + 256);
     block.push_str(&header);
@@ -705,6 +763,22 @@ impl CitationLedger {
     pub fn reset(&mut self) {
         self.items.clear();
         self.seen.clear();
+    }
+
+    /// Give a node this turn's next number without rendering a block for it.
+    ///
+    /// For a node a tool has already displayed in its own format: the number
+    /// is what makes it citable, and re-printing the node underneath the
+    /// tool's own output would just say everything twice.
+    pub fn number_for(&mut self, item: &ContextItem) -> usize {
+        match self.seen.get(&item.id) {
+            Some(&i) => i + 1,
+            None => {
+                self.seen.insert(item.id.clone(), self.items.len());
+                self.items.push(item.clone());
+                self.items.len()
+            }
+        }
     }
 
     /// Render items for the prompt under this turn's numbering.
@@ -788,6 +862,10 @@ pub fn build_rag_messages(
 pub struct ChatRagOutcome {
     /// How many tool calls the model made getting to this answer.
     pub tool_calls: usize,
+    /// How many tool rounds it used, and whether it ran out. `Some(true)`
+    /// means the cap stopped it — an answer written under protest.
+    pub tool_rounds: usize,
+    pub hit_round_cap: bool,
     pub answer: String,
     /// Everything the answer was allowed to cite, in `[#1]`, `[#2]`, … order:
     /// the seed pack plus whatever the model's own searches added. `context`
@@ -889,14 +967,84 @@ pub async fn run_chat_tool(
                 args,
                 Some(agent_tools::Render::Markdown),
             )?;
-            Ok(match out {
+            let text = match out {
                 agent_tools::ToolOutput::Text(t) => t,
                 agent_tools::ToolOutput::Json(v) => {
                     serde_json::to_string_pretty(&v).unwrap_or_default()
                 }
-            })
+            };
+            Ok(cite_tool_nodes(&text, graph, ledger, name))
         }
     }
+}
+
+/// Make the nodes a tool showed citable.
+///
+/// Every graph-backed tool prints `id: <node id>` for each node it returns,
+/// and those were the one kind of evidence an answer could use and not cite:
+/// only `search` registered into the ledger, so an answer reached through
+/// `find_usages` named its symbol while pointing at eight unrelated sources.
+/// Measured 2026-09-20 (docs/dev/RAG-EVAL.md): one question in twelve answered
+/// correctly with the answer's own subject absent from its citation list.
+///
+/// Each id that resolves against the graph takes this turn's next number,
+/// appended to the line the model is already reading. An id that does not
+/// resolve is left exactly as it was — a tool may print ids for nodes this
+/// graph snapshot no longer has, and inventing a citation for one is worse
+/// than omitting it.
+///
+/// Cost: one pass over the graph's nodes per tool call that printed any id,
+/// and none at all for a tool that printed none (`analyze`, `graph_schema`).
+/// Not one pass per id — that is the shape that would hurt on a 500k-node
+/// graph (Agents.md §1a).
+fn cite_tool_nodes(md: &str, graph: &GraphData, ledger: &Mutex<CitationLedger>, how: &str) -> String {
+    let wanted: HashSet<&str> = md
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix("id: "))
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .collect();
+    if wanted.is_empty() {
+        return md.to_string();
+    }
+
+    let mut numbers: HashMap<&str, usize> = HashMap::new();
+    {
+        let mut l = ledger.lock().expect("citation ledger poisoned");
+        for node in graph.nodes.iter().filter(|n| wanted.contains(n.id.as_str())) {
+            let item = ContextItem {
+                id: node.id.clone(),
+                name: node.name.clone(),
+                node_type: node.node_type.as_str().to_string(),
+                file: node.file.clone().unwrap_or_default(),
+                start_line: node.start_line.unwrap_or(0),
+                end_line: node.end_line.unwrap_or(0),
+                description: node.docstring.clone().unwrap_or_default(),
+                distance: 0.0,
+                hop: 0,
+                snippet: None,
+                // How it was reached is the tool's name: more use to a reader
+                // than "semantic", and true.
+                matched_by: how.to_string(),
+            };
+            numbers.insert(node.id.as_str(), l.number_for(&item));
+        }
+    }
+    if numbers.is_empty() {
+        return md.to_string();
+    }
+
+    let mut out = String::with_capacity(md.len() + numbers.len() * 8);
+    for line in md.lines() {
+        out.push_str(line);
+        if let Some(id) = line.trim_start().strip_prefix("id: ") {
+            if let Some(n) = numbers.get(id.trim()) {
+                out.push_str(&format!("  [#{n}]"));
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
 
 pub async fn run_search_tool(
@@ -963,6 +1111,10 @@ pub struct ToolRounds {
     pub usage: Option<Usage>,
     /// How many tools actually ran.
     pub calls: usize,
+    /// How many rounds it used. Equal to `max_rounds` means the loop was cut
+    /// off rather than finished — which reads identically to "it was done"
+    /// unless the two are counted separately.
+    pub rounds: usize,
     /// The answer a round produced *instead* of calling a tool, when one
     /// did. See [`run_tool_rounds`] — the caller must use this rather than
     /// asking for the same answer a second time.
@@ -996,7 +1148,9 @@ where
 {
     let mut usage: Option<Usage> = None;
     let mut calls = 0usize;
+    let mut rounds = 0usize;
     for _ in 0..toolbox.max_rounds {
+        rounds += 1;
         let out = chat.complete_raw(&messages, Some(&toolbox.schemas)).await?;
         usage = merge_usage(usage, out.usage.clone());
         if out.tool_calls.is_empty() {
@@ -1004,7 +1158,9 @@ where
             // back rather than paying to generate it again; an empty one is
             // no answer at all, so that still falls through to the caller.
             let answer = (!out.content.trim().is_empty()).then_some(out);
-            return Ok(ToolRounds { messages, usage, calls, answer });
+            // It stopped on its own: the round that answers is not one it spent.
+            rounds -= 1;
+            return Ok(ToolRounds { messages, usage, calls, rounds, answer });
         }
 
         // Record the assistant turn verbatim; providers reject tool results
@@ -1016,11 +1172,27 @@ where
             ..Default::default()
         });
 
-        for call in &out.tool_calls {
-            let args: Value = serde_json::from_str(&call.function.arguments)
-                .unwrap_or(Value::Object(Default::default()));
-            let arg_line = compact_args(&args);
-            let args_json = serde_json::to_string_pretty(&args).unwrap_or_default();
+        // A round's calls are independent of each other — the model asked for
+        // all of them before seeing any answer — so they run together. This
+        // is not speculative: measured 2026-09-20, a round averages ~2.3 calls
+        // and the worst turn made 9, each one a graph query the user waits
+        // through in series (docs/dev/RAG-EVAL.md).
+        let prepared: Vec<(Value, String, String)> = out
+            .tool_calls
+            .iter()
+            .map(|call| {
+                let args: Value = serde_json::from_str(&call.function.arguments)
+                    .unwrap_or(Value::Object(Default::default()));
+                let arg_line = compact_args(&args);
+                let args_json = serde_json::to_string_pretty(&args).unwrap_or_default();
+                (args, arg_line, args_json)
+            })
+            .collect();
+
+        // Every call announced before any of them runs: the progress feed is
+        // what tells the user why the wait is long, and it should show the
+        // whole round rather than revealing it one call at a time.
+        for (call, (_, arg_line, args_json)) in out.tool_calls.iter().zip(&prepared) {
             on_event(ToolEvent {
                 name: call.function.name.clone(),
                 args: arg_line.clone(),
@@ -1028,8 +1200,23 @@ where
                 summary: None,
                 result: None,
             });
+        }
 
-            let result = (toolbox.run)(&call.function.name, args).await;
+        let results = run_round_calls(
+            toolbox.run,
+            out.tool_calls
+                .iter()
+                .zip(&prepared)
+                .map(|(call, (args, ..))| (call.function.name.clone(), args.clone()))
+                .collect(),
+        )
+        .await;
+
+        // Recorded in the order the model asked, not the order they finished:
+        // providers reject tool results that do not line up with the calls.
+        for ((call, (_, arg_line, args_json)), result) in
+            out.tool_calls.iter().zip(&prepared).zip(results)
+        {
             calls += 1;
             let (text, summary) = match result {
                 Ok(t) => {
@@ -1041,8 +1228,8 @@ where
             let text = clip_tool_result(&text, toolbox.max_result_chars);
             on_event(ToolEvent {
                 name: call.function.name.clone(),
-                args: arg_line,
-                args_json,
+                args: arg_line.clone(),
+                args_json: args_json.clone(),
                 summary: Some(summary),
                 result: Some(text.clone()),
             });
@@ -1060,7 +1247,22 @@ where
         "user",
         "You have used all available tool calls. Answer now with what you have.",
     ));
-    Ok(ToolRounds { messages, usage, calls, answer: None })
+    Ok(ToolRounds { messages, usage, calls, rounds, answer: None })
+}
+
+/// Run one round's tool calls concurrently, returning their results **in the
+/// order they were asked for**.
+///
+/// The ordering is not a nicety: a provider rejects a `tool` message whose
+/// `tool_call_id` does not follow the assistant turn that requested it, so
+/// completion order cannot be allowed to leak into the transcript.
+pub async fn run_round_calls(
+    run: &(dyn Fn(&str, Value) -> futures::future::BoxFuture<'static, Result<String, String>>
+          + Send
+          + Sync),
+    calls: Vec<(String, Value)>,
+) -> Vec<Result<String, String>> {
+    futures::future::join_all(calls.into_iter().map(|(name, args)| run(&name, args))).await
 }
 
 /// One-line rendering of tool arguments for the progress feed.
@@ -1213,6 +1415,185 @@ mod tests {
     // second block also numbered [#1], [#2], [#3]. The model then cited a
     // number that meant two different nodes, and the citation the reader
     // clicked resolved against whichever one the seed pack had put there.
+
+    // ---------- a round's calls run together ----------
+
+    #[tokio::test]
+    async fn a_rounds_calls_run_concurrently_and_come_back_in_order() {
+        use std::time::{Duration, Instant};
+        // Each call sleeps; in series this is 300 ms, together it is ~100 ms.
+        let run = |name: &str, _args: Value| {
+            let name = name.to_string();
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Ok(name)
+            }) as futures::future::BoxFuture<'static, Result<String, String>>
+        };
+        let calls = vec![
+            ("first".to_string(), Value::Null),
+            ("second".to_string(), Value::Null),
+            ("third".to_string(), Value::Null),
+        ];
+        let t = Instant::now();
+        let out = run_round_calls(&run, calls).await;
+        let elapsed = t.elapsed();
+
+        // Asked-for order, not completion order: a provider rejects a `tool`
+        // message whose id does not follow the call that requested it.
+        assert_eq!(
+            out,
+            vec![
+                Ok("first".to_string()),
+                Ok("second".to_string()),
+                Ok("third".to_string())
+            ]
+        );
+        assert!(
+            elapsed < Duration::from_millis(250),
+            "three 100ms calls took {elapsed:?} — they ran in series"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_failed_call_does_not_lose_the_others() {
+        // A tool error is something the model reads and learns from; it must
+        // not take the round's other results down with it.
+        let run = |name: &str, _args: Value| {
+            let name = name.to_string();
+            Box::pin(async move {
+                if name == "bad" {
+                    Err("no such node".to_string())
+                } else {
+                    Ok(name)
+                }
+            }) as futures::future::BoxFuture<'static, Result<String, String>>
+        };
+        let out = run_round_calls(
+            &run,
+            vec![
+                ("good".to_string(), Value::Null),
+                ("bad".to_string(), Value::Null),
+                ("also_good".to_string(), Value::Null),
+            ],
+        )
+        .await;
+        assert_eq!(out[0], Ok("good".to_string()));
+        assert_eq!(out[1], Err("no such node".to_string()));
+        assert_eq!(out[2], Ok("also_good".to_string()));
+    }
+
+    // ---------- a tool's nodes are evidence too ----------
+
+    fn fake_graph() -> ultragraph::types::GraphData {
+        let node = ultragraph::types::GraphNode {
+            id: "function:src/a.rs:clip".into(),
+            name: "clip".into(),
+            node_type: ultragraph::types::GraphNodeType::Function,
+            file: Some("src/a.rs".into()),
+            start_line: Some(10),
+            end_line: Some(20),
+            docstring: Some("Clips a result.".into()),
+            ..Default::default()
+        };
+        ultragraph::types::GraphData {
+            nodes: vec![node],
+            edges: Vec::new(),
+            stats: None,
+            resolution: None,
+        }
+    }
+
+    #[test]
+    fn a_tool_node_gets_a_citable_number() {
+        let ledger = Mutex::new(CitationLedger::new());
+        let md = "- Function clip  src/a.rs:10-20\n  id: function:src/a.rs:clip\n";
+        let out = cite_tool_nodes(md, &fake_graph(), &ledger, "find_usages");
+        assert!(out.contains("id: function:src/a.rs:clip  [#1]"), "{out}");
+        let l = ledger.lock().unwrap();
+        assert_eq!(l.len(), 1);
+        // How it was reached is the tool that reached it.
+        assert_eq!(l.items()[0].matched_by, "find_usages");
+    }
+
+    #[test]
+    fn a_tool_node_continues_the_packs_numbering() {
+        let ledger = Mutex::new(CitationLedger::new());
+        ledger.lock().unwrap().render(&[fake_item(1, None), fake_item(2, None)], 10_000);
+        let out = cite_tool_nodes(
+            "  id: function:src/a.rs:clip\n",
+            &fake_graph(),
+            &ledger,
+            "get_code",
+        );
+        assert!(out.contains("[#3]"), "the pack owns [#1] and [#2]:\n{out}");
+    }
+
+    #[test]
+    fn an_id_the_graph_does_not_have_is_left_alone() {
+        // A tool may print an id this snapshot no longer carries. Inventing a
+        // citation for it is worse than omitting it.
+        let ledger = Mutex::new(CitationLedger::new());
+        let md = "  id: function:src/gone.rs:vanished\n";
+        let out = cite_tool_nodes(md, &fake_graph(), &ledger, "find_usages");
+        assert_eq!(out, md);
+        assert_eq!(ledger.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn output_with_no_ids_is_returned_untouched() {
+        // `analyze` and `graph_schema` print none, and must not cost a pass
+        // over the graph to discover that.
+        let ledger = Mutex::new(CitationLedger::new());
+        let md = "| folder | count |\n| --- | --- |\n| src | 12 |\n";
+        assert_eq!(cite_tool_nodes(md, &fake_graph(), &ledger, "analyze"), md);
+        assert_eq!(ledger.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn the_same_node_from_two_tools_keeps_one_number() {
+        let ledger = Mutex::new(CitationLedger::new());
+        let md = "  id: function:src/a.rs:clip\n";
+        let a = cite_tool_nodes(md, &fake_graph(), &ledger, "find_usages");
+        let b = cite_tool_nodes(md, &fake_graph(), &ledger, "get_code");
+        assert!(a.contains("[#1]") && b.contains("[#1]"), "{a}{b}");
+        assert_eq!(ledger.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn prompt_starts_from_the_same_core() {
+        // Two prompts, one for a turn that can go looking and one for a turn
+        // that cannot. They must differ ONLY by the closed-book tail, or the
+        // next edit lands in one of them and silently not the other.
+        assert!(
+            DEFAULT_SYSTEM_PROMPT.starts_with(SYSTEM_CORE),
+            "the closed-book prompt is the core plus a tail, not a second prompt"
+        );
+        let tail = &DEFAULT_SYSTEM_PROMPT[SYSTEM_CORE.len()..];
+        assert!(tail.contains("ONLY information present") && tail.contains("say so plainly"));
+        // …and the core must carry neither: with tools in hand, both are the
+        // wrong instruction and the model obeys them over the suffix.
+        assert!(!SYSTEM_CORE.contains("ONLY information present"), "{SYSTEM_CORE}");
+        assert!(!SYSTEM_CORE.contains("say so plainly"), "{SYSTEM_CORE}");
+        // Citing is in the half that always applies.
+        assert!(SYSTEM_CORE.contains("[#2]"));
+    }
+
+    #[test]
+    fn an_item_says_how_it_was_reached() {
+        // "Are these any good?" is the judgment the suffix asks for, and it
+        // is unanswerable from name and path alone.
+        let mut near = fake_item(1, None);
+        near.hop = 0;
+        near.matched_by = "keyword".into();
+        let out = CitationLedger::new().render(&[near], 10_000);
+        assert!(out.contains("· keyword match"), "{out}");
+
+        let mut far = fake_item(2, None);
+        far.hop = 3;
+        far.matched_by = "semantic".into();
+        let out = CitationLedger::new().render(&[far], 10_000);
+        assert!(out.contains("· semantic, 3 hop(s) out"), "{out}");
+    }
 
     #[test]
     fn a_second_render_continues_the_numbering() {
@@ -1756,24 +2137,45 @@ pub async fn run_chat_rag(
     let context = retrieve_context(store, embedder, repo_root, query, &opts).await?;
     let retrieval_ms = t_ret.elapsed().as_millis();
 
+    // A model that can go looking must not be told to stay put. An explicit
+    // system prompt from the caller always wins — that one was deliberate.
+    let system = opts
+        .system_prompt
+        .or(Some(if toolbox.is_some() { SYSTEM_CORE } else { DEFAULT_SYSTEM_PROMPT }));
     let mut messages = {
         let mut l = ledger.lock().expect("citation ledger poisoned");
-        build_rag_messages(
-            query,
-            &context,
-            history,
-            opts.system_prompt,
-            opts.max_context_chars,
-            &mut l,
-        )
+        build_rag_messages(query, &context, history, system, opts.max_context_chars, &mut l)
     };
 
-    let fast = opts.fast.then(|| fast_client(chat)).flatten();
+    // Deliberation is what makes a model with tools actually use them.
+    //
+    // Measured on the same question through this path (docs/dev/RAG-EVAL.md,
+    // 2026-09-20): `fast` on → 0 tool calls, `fast` off → 4. Across the whole
+    // 12-question set, `fast` on produced 0 tool calls and an answer identical
+    // to seed-only retrieval. The UI sends `think: false` by default, so the
+    // agentic layer was inert in the shipped configuration and nothing said so.
+    //
+    // **This is a choice the model makes, not a capability the template
+    // removes.** A direct probe of the endpoint with `enable_thinking: false`
+    // still returns tool calls, so the tools are offered and callable either
+    // way. What changes is willingness: handed eight plausible-looking items
+    // and no room to deliberate, it answers from them. Given room, it checks.
+    // Worth re-testing when the prompt or the pack changes — the lever may
+    // move.
+    //
+    // Fast mode therefore applies to a turn that has nothing to call. A caller
+    // who wants the latency back turns the toolbox off, which is at least an
+    // honest trade rather than an invisible one.
+    let fast = (opts.fast && toolbox.is_none())
+        .then(|| fast_client(chat))
+        .flatten();
     let chat = fast.as_ref().unwrap_or(chat);
 
     let t_cmp = std::time::Instant::now();
     let mut tool_usage = None;
     let mut tool_calls = 0;
+    let mut tool_rounds = 0;
+    let mut hit_round_cap = false;
     let mut drafted = None;
     if let Some(tb) = toolbox {
         if let Some(sys) = messages.first_mut().filter(|m| m.role == "system") {
@@ -1784,6 +2186,8 @@ pub async fn run_chat_rag(
         messages = rounds.messages;
         tool_usage = rounds.usage;
         tool_calls = rounds.calls;
+        tool_rounds = rounds.rounds;
+        hit_round_cap = tb.max_rounds > 0 && rounds.rounds >= tb.max_rounds;
         drafted = rounds.answer;
     }
 
@@ -1804,6 +2208,8 @@ pub async fn run_chat_rag(
         completion_ms,
         usage: merge_usage(tool_usage, usage),
         tool_calls,
+        tool_rounds,
+        hit_round_cap,
     })
 }
 
@@ -1841,19 +2247,30 @@ where
     let retrieval_ms = t_ret.elapsed().as_millis();
     on_context(&context);
 
+    // A model that can go looking must not be told to stay put. An explicit
+    // system prompt from the caller always wins — that one was deliberate.
+    let system = opts
+        .system_prompt
+        .or(Some(if toolbox.is_some() { SYSTEM_CORE } else { DEFAULT_SYSTEM_PROMPT }));
     let mut messages = {
         let mut l = ledger.lock().expect("citation ledger poisoned");
-        build_rag_messages(
-            query,
-            &context,
-            history,
-            opts.system_prompt,
-            opts.max_context_chars,
-            &mut l,
-        )
+        build_rag_messages(query, &context, history, system, opts.max_context_chars, &mut l)
     };
 
-    let fast = opts.fast.then(|| fast_client(chat)).flatten();
+    // Deliberation is not a luxury for a model holding tools. `fast_client`
+    // sends `enable_thinking: false`, and on a Qwen3-class template that does
+    // not merely shorten the reasoning — it stops tool calls being emitted at
+    // all. Measured (docs/dev/RAG-EVAL.md, 2026-09-20): 0 tool calls across 12
+    // questions with it on, 4 on the same question with it off. The UI sends
+    // `think: false` by default, so the entire agentic layer was off in the
+    // shipped configuration and nothing said so.
+    //
+    // Fast mode therefore applies to a turn that has nothing to call. A caller
+    // who wants the latency back turns the toolbox off, which is at least an
+    // honest trade rather than an invisible one.
+    let fast = (opts.fast && toolbox.is_none())
+        .then(|| fast_client(chat))
+        .flatten();
     let chat = fast.as_ref().unwrap_or(chat);
 
     let t_cmp = std::time::Instant::now();
@@ -1861,6 +2278,8 @@ where
     // starting neighbourhood, the tools let it follow the threads it finds.
     let mut tool_usage = None;
     let mut tool_calls = 0;
+    let mut tool_rounds = 0;
+    let mut hit_round_cap = false;
     let mut drafted = None;
     if toolbox.is_some() {
         // Tell it the tools exist, and when they're worth using.
@@ -1873,6 +2292,8 @@ where
         messages = rounds.messages;
         tool_usage = rounds.usage;
         tool_calls = rounds.calls;
+        tool_rounds = rounds.rounds;
+        hit_round_cap = tb.max_rounds > 0 && rounds.rounds >= tb.max_rounds;
         drafted = rounds.answer;
     }
 
@@ -1896,6 +2317,8 @@ where
             completion_ms: t_cmp.elapsed().as_millis(),
             usage: tool_usage,
             tool_calls,
+            tool_rounds,
+            hit_round_cap,
         });
     }
 
@@ -1925,5 +2348,7 @@ where
         completion_ms,
         usage: merge_usage(tool_usage, usage),
         tool_calls,
+        tool_rounds,
+        hit_round_cap,
     })
 }

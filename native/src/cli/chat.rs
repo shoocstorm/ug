@@ -74,7 +74,7 @@ pub(crate) fn chat_client_from_args(args: &[String]) -> chat::ChatClient {
     })
 }
 
-fn chat_config_from_args(args: &[String]) -> chat::ChatConfig {
+pub(crate) fn chat_config_from_args(args: &[String]) -> chat::ChatConfig {
     let base_url_flag = flag_value(args, &["--chat-base-url"])
         .or_else(|| flag_value(args, &["--base-url"]));
     let (base_url, _) = config::resolve_pref_cfg(base_url_flag, "chat.base_url");
@@ -151,8 +151,8 @@ pub(crate) fn run_chat(args: &[String]) {
     let no_tools = has_flag(args, "--no-tools");
     let max_tool_rounds: usize = flag_value(args, &["--max-tool-rounds"])
         .and_then(|s| s.parse().ok())
-        .unwrap_or(4)
-        .min(8);
+        .unwrap_or(chat::DEFAULT_TOOL_ROUNDS)
+        .min(chat::MAX_TOOL_ROUNDS);
 
     let k: usize = flag_value(args, &["-k", "--limit"])
         .and_then(|s| s.parse().ok())
@@ -401,6 +401,11 @@ fn chat_outcome_to_json(query: &str, outcome: &chat::ChatRagOutcome) -> serde_js
         "seed_id": outcome.context.seed_id,
         "retrieval_ms": outcome.retrieval_ms,
         "completion_ms": outcome.completion_ms,
+        // How many times it went and looked. Absent, "answered from the pack"
+        // and "searched twice and then answered" are the same JSON.
+        "tool_calls": outcome.tool_calls,
+        "tool_rounds": outcome.tool_rounds,
+        "hit_round_cap": outcome.hit_round_cap,
         "usage": outcome.usage,
     })
 }
@@ -438,6 +443,13 @@ fn print_chat_meta(outcome: &chat::ChatRagOutcome) {
         outcome.context.items.len(),
         match outcome.tool_calls {
             0 => String::new(),
+            // Say when it stopped because it ran out rather than because it
+            // was done: that answer is the one to distrust, and --max-tool-rounds
+            // is the fix.
+            n if outcome.hit_round_cap => format!(
+                " · {} tool call(s) in {} round(s), hit the cap",
+                n, outcome.tool_rounds
+            ),
             n => format!(" · {} tool call(s)", n),
         },
         match &outcome.usage {
@@ -700,7 +712,7 @@ fn print_chat_help() {
     println!("  {C_CYAN}--no-snippets{C_RESET}            Don't read source snippets from disk");
     println!("  {C_CYAN}--think{C_RESET}                  Let a reasoning model deliberate (slower, rarely better)");
     println!("  {C_CYAN}--no-tools{C_RESET}               Answer from retrieved context only — no graph tool calls");
-    println!("  {C_CYAN}--max-tool-rounds{C_RESET} <n>    Cap tool-calling rounds (default: 4, max 8)");
+    println!("  {C_CYAN}--max-tool-rounds{C_RESET} <n>    Cap tool-calling rounds (default: {}, max {})", chat::DEFAULT_TOOL_ROUNDS, chat::MAX_TOOL_ROUNDS);
     println!("  {C_CYAN}--repo-root{C_RESET} <path>       Repo root for snippet resolution (default: cwd)");
     println!();
     println!("{C_BOLD}Chat model:{C_RESET}");
@@ -711,7 +723,7 @@ fn print_chat_help() {
     println!("  {C_CYAN}--chat-api-key{C_RESET} <key>     Override bearer token for chat only");
     println!("  {C_CYAN}--temperature{C_RESET} <f>        Sampling temperature (default: 0.2)");
     println!("  {C_CYAN}--max-tokens{C_RESET} <n>         Max completion tokens (default: 1024)");
-    println!("  {C_CYAN}--chat-timeout{C_RESET} <secs>    HTTP timeout for chat calls (default: 180)");
+    println!("  {C_CYAN}--chat-timeout{C_RESET} <secs>    HTTP timeout for chat calls (default: 900)");
     println!("  {C_CYAN}--system{C_RESET} <text>          Override the default RAG system prompt");
     println!("  {C_DIM}Persist any of these once with `ug config set chat.model …` — flags/env vars still win.{C_RESET}");
     println!();

@@ -16,6 +16,15 @@ test-threads = -3
 # nag about it until something is actually stuck.
 slow-timeout = { period = "60s", terminate-after = 10 }
 
+# The RAG eval is not a unit test: it drives a real language model through a
+# dozen whole turns, each of which may deliberate and call tools eight rounds
+# deep. At the default ceiling (60s x 10) nextest terminated it mid-run and
+# the measurement was lost. Scoped to this test so the "something is stuck"
+# guard keeps its teeth everywhere else.
+[[profile.default.overrides]]
+filter = 'test(rag_eval)'
+slow-timeout = { period = "120s", terminate-after = 30 }
+
 [profile.ci]
 # CI runners are small (2-4 cores) — oversubscribing them is a net loss there.
 test-threads = "num-cpus"
