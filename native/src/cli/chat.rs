@@ -237,6 +237,9 @@ pub(crate) fn run_chat(args: &[String]) {
             o.where_clause = where_clause.as_deref();
             o.system_prompt = system_prompt.as_deref();
             o.fast = !think;
+            // With tools, the model does its own retrieval — see
+            // `ChatRagOptions::seed`. `--seed` asks for the old pre-pass too.
+            o.seed = no_tools || has_flag(args, "--seed");
             let _ = q; // q reserved for future per-call overrides
             o
         };
@@ -406,6 +409,7 @@ fn chat_outcome_to_json(query: &str, outcome: &chat::ChatRagOutcome) -> serde_js
         "tool_calls": outcome.tool_calls,
         "tool_rounds": outcome.tool_rounds,
         "hit_round_cap": outcome.hit_round_cap,
+        "cost": chat::cost_json(&outcome.cost),
         "usage": outcome.usage,
     })
 }
@@ -433,6 +437,31 @@ fn print_context_items(items: &[ultragraph::storage::ContextItem]) {
         );
     }
     println!();
+}
+
+/// The turn's token bill, one line. `whole_files` is the honest comparison:
+/// the files this answer's citations came from, read whole, which is what an
+/// agent without a graph pays once it has found them.
+fn print_token_cost(outcome: &chat::ChatRagOutcome) {
+    let c = &outcome.cost;
+    let est = ultragraph::limits::est_tokens;
+    let sent = est(c.sent_chars());
+    println!(
+        "{C_CYAN}▸{C_RESET} tokens (est): context={} · tools={} · answer={} · sent={}",
+        est(c.context_chars),
+        est(c.tool_chars),
+        est(c.answer_chars),
+        sent,
+    );
+    let whole = est(c.whole_file_chars as usize);
+    if c.files > 0 && sent > 0 && whole > 0 {
+        println!(
+            "{C_CYAN}▸{C_RESET} the {} file(s) behind these citations, read whole: ~{} tokens ({:.1}x)",
+            c.files,
+            whole,
+            whole as f64 / sent as f64,
+        );
+    }
 }
 
 fn print_chat_meta(outcome: &chat::ChatRagOutcome) {
@@ -475,6 +504,7 @@ fn print_chat_outcome(query: &str, outcome: &chat::ChatRagOutcome, show_context:
     println!("{}", outcome.answer.trim_end());
     println!();
     print_chat_meta(outcome);
+    print_token_cost(outcome);
 }
 
 /// One RAG turn with live token streaming to the terminal: a transient
@@ -713,6 +743,7 @@ fn print_chat_help() {
     println!("  {C_CYAN}--think{C_RESET}                  Let a reasoning model deliberate (slower, rarely better)");
     println!("  {C_CYAN}--no-tools{C_RESET}               Answer from retrieved context only — no graph tool calls");
     println!("  {C_CYAN}--max-tool-rounds{C_RESET} <n>    Cap tool-calling rounds (default: {}, max {})", chat::DEFAULT_TOOL_ROUNDS, chat::MAX_TOOL_ROUNDS);
+    println!("  {C_CYAN}--seed{C_RESET}               Retrieve once on your wording before the model speaks (default: only with --no-tools)");
     println!("  {C_CYAN}--repo-root{C_RESET} <path>       Repo root for snippet resolution (default: cwd)");
     println!();
     println!("{C_BOLD}Chat model:{C_RESET}");

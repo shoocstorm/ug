@@ -203,8 +203,76 @@ for (const doc of DOCS) {
 }
 must('streaming a doc renders what rendering it whole renders', drift === 0);
 
+// ── 6. What the turn cost ────────────────────────────────────────────────────
+//
+// Three unrelated quantities share this box — what the question put in front
+// of the model, what the endpoint charged, and what the same evidence costs
+// read whole. The provider's raw total used to sit unlabelled in the meta
+// strip as `tokens=90168`, beside a `~90,108` baseline it had nothing to do
+// with; two numbers that look identical and mean different things.
+
+console.log('reporting what the turn cost');
+
+const costMod = path.join(tmp, 'cost.mjs');
+fs.writeFileSync(costMod, `
+    function escapeHtml(t) { return String(t == null ? '' : t); }
+    function stubNode(tag) {
+        return {
+            tagName: tag, className: '', textContent: '', innerHTML: '', children: [],
+            appendChild(k) { this.children.push(k); return k; },
+        };
+    }
+    const document = { createElement: stubNode };
+    ${lift(chatSrc, 'buildCostBox')}
+    export { buildCostBox };
+`);
+const B = await import(costMod);
+
+const flat = (node) => [node, ...node.children.flatMap(flat)];
+const render = (done) => flat(B.buildCostBox(done));
+
+const DONE = {
+    cost: {
+        context_tokens: 10256, tool_tokens: 16935, answer_tokens: 1619,
+        sent_tokens: 27191, whole_files: 9, whole_file_tokens: 90108,
+        saved_ratio: 3.3,
+    },
+    usage: { total_tokens: 90168 },
+    tool_rounds: 3,
+};
+
+const nodes = render(DONE);
+const text = nodes.map(n => n.textContent + ' ' + n.innerHTML).join('\n');
+const rowFor = (label) => nodes.find(n => String(n.innerHTML).includes(label));
+
+must('the parts of the question are listed', ['Retrieved pack', 'Tool results', 'Answer']
+    .every(l => rowFor(l)));
+must('the numbers are grouped for reading', text.includes('10,256') && text.includes('90,168'));
+
+// The fix: the provider's total is labelled and inside the box.
+must("the endpoint's own total is labelled", !!rowFor('Billed by the model'));
+must('the billed figure is exact, not marked with ~',
+    text.includes('>90,168<') && !text.includes('~90,168'));
+must('why billed exceeds the evidence is explained',
+    text.includes('re-sent') && text.includes('3 rounds'));
+
+// …and the baseline is not one of the parts, nor part of the bill.
+const baseline = rowFor('cited file');
+must('the baseline names its file count', !!baseline && baseline.innerHTML.includes('9 cited files'));
+must('the baseline is set apart', !!baseline && baseline.className.includes('baseline'));
+must('the baseline says it was not spent',
+    text.includes('not something this turn spent'));
+must('estimates are marked as estimates', text.includes('~10,256') && text.includes('~90,108'));
+must('the estimate caveat is present', text.includes('no tokenizer'));
+
+// A turn with no tools and no resolvable files must not invent either row.
+const bare = render({ cost: { context_tokens: 10, tool_tokens: 0, answer_tokens: 5, sent_tokens: 15, whole_files: 0 } });
+const bareText = bare.map(n => n.textContent + ' ' + n.innerHTML).join('\n');
+must('no billed row without a provider count', !bareText.includes('Billed by the model'));
+must('no comparison without a measured file', !bareText.includes('read whole'));
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0
-    ? 'the answer renders markdown as specified'
+    ? 'the answer renders markdown and reports its cost as specified'
     : `${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

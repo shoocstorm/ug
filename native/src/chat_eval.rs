@@ -354,7 +354,13 @@ fn rag_eval_agentic_recall() {
                 repo_root: &root,
                 query: &q.q,
                 history: &[],
-                opts: ChatRagOptions::new(),
+                opts: {
+                    let mut o = ChatRagOptions::new();
+                    // Mirror what ships with a toolbox attached. `UG_EVAL_SEED=1`
+                    // is the control: the same turn with the pre-pass back on.
+                    o.seed = std::env::var("UG_EVAL_SEED").is_ok();
+                    o
+                },
                 toolbox: Some(&toolbox),
                 ledger: &ledger,
             })

@@ -64,6 +64,21 @@ pub struct Limit {
 /// which is the right direction to be wrong in when overflow is silent.
 const CHARS_PER_TOKEN: f32 = 3.7;
 
+/// Estimate the tokens a piece of text costs, for reporting.
+///
+/// An estimate, and labelled as one wherever it is shown: the real count
+/// depends on the model's tokenizer, which `ug` does not have and cannot get
+/// for an arbitrary OpenAI-compatible endpoint. When a provider reports real
+/// `usage`, prefer that — this is for the parts nothing reports, such as what
+/// one tool's output added to the prompt.
+///
+/// Uses the same 3.7 as the embedding budget rather than the folklore 4, so
+/// one number describes this codebase's idea of a token. The UI and the tour
+/// each had their own `/ 4`.
+pub fn est_tokens(chars: usize) -> usize {
+    (chars as f32 / CHARS_PER_TOKEN).round() as usize
+}
+
 /// Chars of the template that precede the description: the type prefix and
 /// the name in both its exact and split forms.
 const NAME_RESERVE_CHARS: usize = 150;

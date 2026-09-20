@@ -12,7 +12,13 @@
             box.className = 'chat-citations';
             box.open = !!state.chatCitesOpen;
             const sum = document.createElement('summary');
-            sum.textContent = `${cites.length} source${cites.length === 1 ? '' : 's'}`;
+            // "19 sources" says nothing about what they are or why they are
+            // here — and the number confuses when a tool returned 15 and the
+            // list shows 19, because it is the union of everything the answer
+            // could cite, not the last tool's result.
+            sum.textContent = cites.length === 1
+                ? '1 source the answer could cite — click to find it on the graph'
+                : `${cites.length} sources the answer could cite — click one to find it on the graph`;
             box.appendChild(sum);
             // Remember the user's preference for the rest of the session.
             box.addEventListener('toggle', () => { state.chatCitesOpen = box.open; });
@@ -650,6 +656,70 @@
             }
         }
 
+        // What the turn cost, and what the same evidence costs read whole.
+        //
+        // The comparison is the narrow, defensible one: the files these
+        // citations came from, opened in full. That is what an agent without
+        // a graph pays once it has found them — not a strawman that reads the
+        // repo, and not a claim about any other RAG system.
+        function buildCostBox(done) {
+            const cost = done.cost;
+            const n = (v) => (v || 0).toLocaleString();
+            const box = document.createElement('details');
+            box.className = 'chat-cost';
+
+            const sum = document.createElement('summary');
+            sum.textContent = cost.saved_ratio
+                ? `~${n(cost.sent_tokens)} tokens of evidence · ${cost.saved_ratio}× smaller than the files it came from`
+                : `~${n(cost.sent_tokens)} tokens of evidence`;
+            box.appendChild(sum);
+
+            const row = (label, value, cls) => {
+                const r = document.createElement('div');
+                r.className = 'cost-row' + (cls ? ' ' + cls : '');
+                r.innerHTML = `<span>${escapeHtml(label)}</span><span>${escapeHtml(value)}</span>`;
+                box.appendChild(r);
+            };
+            const note = (text) => {
+                const d = document.createElement('div');
+                d.className = 'cost-note';
+                d.textContent = text;
+                box.appendChild(d);
+            };
+
+            // 1. What this question put in front of the model.
+            row('Retrieved pack', `~${n(cost.context_tokens)}`);
+            row('Tool results', `~${n(cost.tool_tokens)}`);
+            row('Answer', `~${n(cost.answer_tokens)}`);
+
+            // 2. What the endpoint actually charged. A different question, and
+            // always the larger one — which is exactly why it needs saying
+            // rather than sitting unlabelled in the meta line as `tokens=`.
+            const billed = done.usage && done.usage.total_tokens;
+            if (billed) {
+                row('Billed by the model', n(billed), 'sep');
+                const rounds = done.tool_rounds || 0;
+                note(rounds > 1
+                    ? `Counted by your endpoint, not estimated. Larger than the evidence above because `
+                      + `the system prompt, the tool schemas and the whole conversation are re-sent on `
+                      + `each of the ${rounds} rounds.`
+                    : 'Counted by your endpoint, not estimated. Larger than the evidence above because '
+                      + 'it also includes the system prompt, the tool schemas and the question itself.');
+            }
+
+            // 3. The comparison — not part of this turn's bill at all.
+            if (cost.whole_files) {
+                row(`${cost.whole_files} cited file${cost.whole_files === 1 ? '' : 's'}, read whole`,
+                    `~${n(cost.whole_file_tokens)}`, 'sep baseline');
+                note('What the same evidence would cost opened in full — the alternative to '
+                    + 'retrieval, not something this turn spent. Counts only the files these '
+                    + 'citations came from.');
+            }
+
+            note('~ marks an estimate from character length; ug has no tokenizer for your endpoint.');
+            return box;
+        }
+
         // One streaming assistant turn: a status strip that narrates the
         // server's progress, the answer text as it arrives, and the citation
         // list once retrieval reports it.
@@ -785,14 +855,22 @@
                     // finished text is authoritative, so render it whole.
                     if (text) setMarkdown(bodyEl, text, cites);
                     else bodyEl.textContent = '(no answer)';
+                    // The summary goes first: it is the one line that says
+                    // what the whole turn cost, and reading it should not mean
+                    // scrolling past every tool call to reach it.
+                    if (done && done.cost) el.appendChild(buildCostBox(done));
                     groupToolRows(el);
                     if (cites && cites.length) el.appendChild(buildCitationBox(cites));
                     const bits = [];
                     if (done && done.retrieval_ms != null) bits.push(`retrieval=${done.retrieval_ms}ms`);
                     if (done && done.completion_ms != null) bits.push(`completion=${done.completion_ms}ms`);
                     else if (totalMs != null) bits.push(`total=${totalMs}ms`);
-                    if (done && done.usage && done.usage.total_tokens) bits.push(`tokens=${done.usage.total_tokens}`);
-                    if (done && done.tool_calls) bits.push(`tools=${done.tool_calls}`);
+
+                    if (done && done.tool_calls) {
+                        bits.push(done.hit_round_cap
+                            ? `tools=${done.tool_calls} in ${done.tool_rounds} rounds (hit the cap)`
+                            : `tools=${done.tool_calls}`);
+                    }
                     if (done && done.dest) bits.push(`dest=${done.dest}`);
                     if (done && done.chat_model) bits.push(`model=${done.chat_model}`);
                     if (bits.length) {

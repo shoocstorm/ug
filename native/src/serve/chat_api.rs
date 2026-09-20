@@ -262,6 +262,12 @@ pub(crate) struct ChatBody {
     /// local model spends its minutes.
     #[serde(default)]
     think: Option<bool>,
+    /// Run the hybrid seed retrieval before the model speaks. Defaults to
+    /// **off when tools are on** — a deliberating model searches for itself,
+    /// in the codebase's vocabulary rather than the user's, so the seed pack
+    /// is a second and worse-phrased copy of the same neighbourhood.
+    #[serde(default)]
+    seed: Option<bool>,
 }
 
 /// Citation list shared by the JSON and SSE chat responses.
@@ -371,6 +377,7 @@ pub(crate) async fn api_chat(
     opts.where_clause = body.where_clause.as_deref();
     opts.system_prompt = body.system_prompt.as_deref();
     opts.fast = !body.think.unwrap_or(false);
+    opts.seed = body.seed.unwrap_or(!body.tools.unwrap_or(true));
 
     let dest_name = db.backend_name();
     let repo_root = state.repo_root();
@@ -437,6 +444,7 @@ pub(crate) async fn api_chat(
                 // confident one unless it says so.
                 "tool_rounds": o.tool_rounds,
                 "hit_round_cap": o.hit_round_cap,
+                "cost": chat::cost_json(&o.cost),
                 "usage": o.usage,
                 "dest": dest_name,
                 "chat_model": chat_client.config().model.clone(),
@@ -524,6 +532,8 @@ pub(crate) fn api_chat_stream(
         opts.where_clause = body.where_clause.as_deref();
         opts.system_prompt = body.system_prompt.as_deref();
         opts.fast = !body.think.unwrap_or(false);
+        // The toolbox decides: with tools the model does its own retrieval.
+        opts.seed = body.seed.unwrap_or(!body.tools.unwrap_or(true));
 
         emit("phase", serde_json::json!({ "phase": "retrieving" }));
 
@@ -638,6 +648,7 @@ pub(crate) fn api_chat_stream(
                     "tool_calls": o.tool_calls,
                     "tool_rounds": o.tool_rounds,
                     "hit_round_cap": o.hit_round_cap,
+                    "cost": chat::cost_json(&o.cost),
                     "usage": o.usage,
                     "dest": dest_name,
                     "chat_model": model,

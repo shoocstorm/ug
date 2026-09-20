@@ -50,7 +50,7 @@ fn an_answer_renders_markdown_as_specified() {
     let (ok, text) = run();
     assert!(ok, "answer markdown check failed:\n{text}");
     assert!(
-        text.contains("the answer renders markdown as specified"),
+        text.contains("the answer renders markdown and reports its cost as specified"),
         "the harness did not report its checks:\n{text}"
     );
     // The constructs are independently breakable, so all of them have to have
@@ -66,5 +66,11 @@ fn an_answer_renders_markdown_as_specified() {
     assert!(
         text.contains("escaping model output"),
         "the escaping checks must run:\n{text}"
+    );
+    // Three unrelated quantities share the cost box. The provider's raw total
+    // used to sit unlabelled beside a baseline it has nothing to do with.
+    assert!(
+        text.contains("reporting what the turn cost"),
+        "the cost-box checks must run:\n{text}"
     );
 }

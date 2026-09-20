@@ -842,6 +842,7 @@ pub fn build_rag_messages(
     system_prompt: Option<&str>,
     ctx_max_chars: usize,
     ledger: &mut CitationLedger,
+    no_seed: bool,
 ) -> Vec<ChatMessage> {
     let system = system_prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT);
     let mut msgs: Vec<ChatMessage> = Vec::with_capacity(history.len() + 3);
@@ -850,7 +851,17 @@ pub fn build_rag_messages(
 
     let rendered = ledger.render(&context.items, ctx_max_chars);
     let preface = if rendered.is_empty() {
-        "No retrieved context was found for this query.".to_string()
+        // Two different empty states, and the model must not confuse them:
+        // "we looked and found nothing" is a fact about the repository,
+        // "we have not looked yet" is an instruction to go and look. The
+        // caller says which by whether it asked for a seed pass at all.
+        if no_seed {
+            "No context has been retrieved yet — that is deliberate, not a finding. \
+             Search for what you need before answering; do not report the repository as empty."
+                .to_string()
+        } else {
+            "No retrieved context was found for this query.".to_string()
+        }
     } else {
         format!(
             "Retrieved context (cite as [#N]):\n\n{}\n---",
@@ -875,6 +886,68 @@ pub fn build_rag_messages(
 /// the HTTP layer so the behaviour is identical regardless of entry
 /// point. Returns the answer text, the retrieval result, and timing /
 /// usage info so callers can surface latency and token counts.
+/// What a turn spent, and what the same evidence would have cost read whole.
+///
+/// The comparison is deliberately narrow, because a broad one would not be
+/// true. `whole_file_chars` is the size on disk of exactly the files this
+/// turn's citations came from — it is what an agent pays when it locates the
+/// right files and opens them, which is the realistic alternative to this
+/// pipeline, not a strawman that reads the repo. It is **not** a claim about
+/// any particular other RAG system, and it says nothing about answer quality.
+///
+/// Files the index knows but the working tree no longer has are skipped, so
+/// `files` is what was actually measured rather than what was cited.
+#[derive(Clone, Debug, Default)]
+pub struct TurnCost {
+    /// The retrieved pack put into the prompt.
+    pub context_chars: usize,
+    /// Everything the tools returned, after clipping.
+    pub tool_chars: usize,
+    /// The answer itself.
+    pub answer_chars: usize,
+    /// Distinct files behind the citations, that exist on disk.
+    pub files: usize,
+    /// Those files, whole.
+    pub whole_file_chars: u64,
+}
+
+impl TurnCost {
+    /// What reached the model on this turn's behalf: pack plus tool output.
+    /// Excludes the system prompt, the history and the tool schemas, which
+    /// are the same whatever the question is.
+    pub fn sent_chars(&self) -> usize {
+        self.context_chars + self.tool_chars
+    }
+}
+
+/// The turn's token bill, as the UI and the CLI both report it.
+///
+/// Chars are facts; tokens are an estimate from one shared constant
+/// (`limits::est_tokens`) because `ug` has no tokenizer for an arbitrary
+/// endpoint. `whole_files` is what the same evidence costs read whole — see
+/// `chat::TurnCost` for exactly what that claims and what it does not.
+pub fn cost_json(c: &TurnCost) -> serde_json::Value {
+    let est = crate::limits::est_tokens;
+    let sent = c.sent_chars();
+    let whole = c.whole_file_chars as usize;
+    serde_json::json!({
+        "context_tokens": est(c.context_chars),
+        "tool_tokens": est(c.tool_chars),
+        "answer_tokens": est(c.answer_chars),
+        "sent_tokens": est(sent),
+        "whole_files": c.files,
+        "whole_file_tokens": est(whole),
+        // Only when there is something to compare: no files measured means
+        // no claim, rather than a division that invents one.
+        "saved_ratio": if sent > 0 && whole > 0 {
+            Some(((whole as f64 / sent as f64) * 10.0).round() / 10.0)
+        } else {
+            None
+        },
+        "estimated": true,
+    })
+}
+
 pub struct ChatRagOutcome {
     /// How many tool calls the model made getting to this answer.
     pub tool_calls: usize,
@@ -882,6 +955,8 @@ pub struct ChatRagOutcome {
     /// means the cap stopped it — an answer written under protest.
     pub tool_rounds: usize,
     pub hit_round_cap: bool,
+    /// What this turn cost, and the read-it-whole comparison.
+    pub cost: TurnCost,
     pub answer: String,
     /// Everything the answer was allowed to cite, in `[#1]`, `[#2]`, … order:
     /// the seed pack plus whatever the model's own searches added. `context`
@@ -1135,6 +1210,8 @@ pub struct ToolRounds {
     /// off rather than finished — which reads identically to "it was done"
     /// unless the two are counted separately.
     pub rounds: usize,
+    /// Characters every tool result added to the prompt, after clipping.
+    pub result_chars: usize,
     /// The answer a round produced *instead* of calling a tool, when one
     /// did. See [`run_tool_rounds`] — the caller must use this rather than
     /// asking for the same answer a second time.
@@ -1169,6 +1246,7 @@ where
     let mut usage: Option<Usage> = None;
     let mut calls = 0usize;
     let mut rounds = 0usize;
+    let mut result_chars = 0usize;
     for _ in 0..toolbox.max_rounds {
         rounds += 1;
         let out = chat.complete_raw(&messages, Some(&toolbox.schemas)).await?;
@@ -1180,7 +1258,7 @@ where
             let answer = (!out.content.trim().is_empty()).then_some(out);
             // It stopped on its own: the round that answers is not one it spent.
             rounds -= 1;
-            return Ok(ToolRounds { messages, usage, calls, rounds, answer });
+            return Ok(ToolRounds { messages, usage, calls, rounds, result_chars, answer });
         }
 
         // Record the assistant turn verbatim; providers reject tool results
@@ -1240,12 +1318,16 @@ where
             calls += 1;
             let (text, summary) = match result {
                 Ok(t) => {
-                    let lines = t.lines().count();
-                    (t, format!("{} line(s)", lines))
+                    // Tokens, not lines: what this result costs is what the
+                    // reader is deciding about, and a line of a table and a
+                    // line of source are not the same price.
+                    let tokens = crate::limits::est_tokens(t.chars().count());
+                    (t, format!("~{} tokens", fmt_thousands(tokens)))
                 }
                 Err(e) => (format!("Tool error: {}", e), format!("failed: {}", e)),
             };
             let text = clip_tool_result(&text, toolbox.max_result_chars);
+            result_chars += text.chars().count();
             on_event(ToolEvent {
                 name: call.function.name.clone(),
                 args: arg_line.clone(),
@@ -1267,7 +1349,7 @@ where
         "user",
         "You have used all available tool calls. Answer now with what you have.",
     ));
-    Ok(ToolRounds { messages, usage, calls, rounds, answer: None })
+    Ok(ToolRounds { messages, usage, calls, rounds, result_chars, answer: None })
 }
 
 /// Run one round's tool calls concurrently, returning their results **in the
@@ -1283,6 +1365,64 @@ pub async fn run_round_calls(
     calls: Vec<(String, Value)>,
 ) -> Vec<Result<String, String>> {
     futures::future::join_all(calls.into_iter().map(|(name, args)| run(&name, args))).await
+}
+
+/// Assemble what the turn spent, alongside the read-it-whole comparison.
+fn turn_cost(
+    answer: &str,
+    context_chars: usize,
+    tool_chars: usize,
+    ledger: &Mutex<CitationLedger>,
+    repo_root: &std::path::Path,
+) -> TurnCost {
+    let (files, whole_file_chars) = {
+        let l = ledger.lock().expect("citation ledger poisoned");
+        whole_file_cost(l.items(), repo_root)
+    };
+    TurnCost {
+        context_chars,
+        tool_chars,
+        answer_chars: answer.chars().count(),
+        files,
+        whole_file_chars,
+    }
+}
+
+/// Size on disk of the distinct files this turn's citations came from.
+///
+/// The honest baseline for "what did this save": an agent without a graph
+/// still has to find the right files, and then it opens them. Files the index
+/// lists but the tree no longer has are skipped rather than guessed at, so
+/// the count returned is what was actually measured.
+fn whole_file_cost(items: &[ContextItem], repo_root: &std::path::Path) -> (usize, u64) {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut bytes = 0u64;
+    let mut files = 0usize;
+    for item in items {
+        if item.file.is_empty() || !seen.insert(item.file.as_str()) {
+            continue;
+        }
+        if let Ok(md) = std::fs::metadata(repo_root.join(&item.file)) {
+            if md.is_file() {
+                bytes += md.len();
+                files += 1;
+            }
+        }
+    }
+    (files, bytes)
+}
+
+/// `12345` → `12,345`. Big token counts are unreadable without it.
+fn fmt_thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// One-line rendering of tool arguments for the progress feed.
@@ -1353,6 +1493,18 @@ pub struct ChatRagOptions<'a> {
     ///
     /// [`no_think_body`]: no_think_body
     pub fast: bool,
+    /// Run one hybrid retrieval on the user's wording before the model speaks.
+    ///
+    /// Necessary when the model has no tools — it is the only evidence there
+    /// will be. **Redundant when it does**: a deliberating model calls
+    /// `search` itself, with its own wording, and the seed pack then arrives
+    /// as a second, worse-phrased set of the same neighbourhood. One observed
+    /// turn: 8 seed items the model did not use, 15 from its own search, 19
+    /// sources listed, and ~10k tokens of pack paid for either way.
+    ///
+    /// Defaulted from the toolbox by both transports rather than here, since
+    /// this struct does not know whether one was attached.
+    pub seed: bool,
 }
 
 impl<'a> ChatRagOptions<'a> {
@@ -1368,6 +1520,7 @@ impl<'a> ChatRagOptions<'a> {
             where_clause: None,
             system_prompt: None,
             fast: true,
+            seed: true,
         }
     }
 }
@@ -1580,6 +1733,31 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_pack_says_which_kind_of_empty_it_is() {
+        // "We looked and found nothing" is a fact about the repository and
+        // invites the model to say so. "We have not looked yet" is an
+        // instruction. The same empty pack has to read as one or the other.
+        let ctx = RankedContext {
+            query: "q".into(),
+            items: vec![],
+            total_chars: 0,
+            seed_id: None,
+        };
+        let looked =
+            build_rag_messages("q", &ctx, &[], None, 10_000, &mut CitationLedger::new(), false);
+        assert!(looked[1].content.starts_with("No retrieved context"), "{}", looked[1].content);
+
+        let not_yet =
+            build_rag_messages("q", &ctx, &[], None, 10_000, &mut CitationLedger::new(), true);
+        assert!(not_yet[1].content.contains("deliberate, not a finding"), "{}", not_yet[1].content);
+        assert!(
+            not_yet[1].content.contains("do not report the repository as empty"),
+            "{}",
+            not_yet[1].content
+        );
+    }
+
+    #[test]
     fn prompt_starts_from_the_same_core() {
         // Two prompts, one for a turn that can go looking and one for a turn
         // that cannot. They must differ ONLY by the closed-book tail, or the
@@ -1676,7 +1854,7 @@ mod tests {
             seed_id: None,
         };
         let mut ledger = CitationLedger::new();
-        let msgs = build_rag_messages("q", &ctx, &[], None, 10_000, &mut ledger);
+        let msgs = build_rag_messages("q", &ctx, &[], None, 10_000, &mut ledger, false);
         assert!(msgs[1].content.contains("[#1]") && msgs[1].content.contains("[#2]"));
         assert_eq!(ledger.len(), 2);
         assert_eq!(ledger.items()[0].id, fake_item(1, None).id);
@@ -1711,6 +1889,7 @@ mod tests {
             Some("CUSTOM"),
             10_000,
             &mut CitationLedger::new(),
+            false,
         );
 
         // [system, system(context), user(prev), assistant(prev), user(now)]
@@ -1779,7 +1958,7 @@ mod tests {
             seed_id: None,
         };
         let msgs =
-            build_rag_messages("hello", &ctx, &[], None, 10_000, &mut CitationLedger::new());
+            build_rag_messages("hello", &ctx, &[], None, 10_000, &mut CitationLedger::new(), false);
         assert_eq!(msgs[0].content, DEFAULT_SYSTEM_PROMPT);
         assert!(msgs[1].content.starts_with("No retrieved context"));
     }
@@ -2166,7 +2345,14 @@ pub async fn run_chat_rag(
         ledger,
     } = req;
     let t_ret = std::time::Instant::now();
-    let context = retrieve_context(store, embedder, repo_root, query, &opts).await?;
+    // Skipping the seed is not "no retrieval" — it hands the retrieval to the
+    // model, which searches in the codebase's own vocabulary instead of the
+    // user's. See `ChatRagOptions::seed`.
+    let context = if opts.seed {
+        retrieve_context(store, embedder, repo_root, query, &opts).await?
+    } else {
+        RankedContext { query: query.to_string(), items: Vec::new(), total_chars: 0, seed_id: None }
+    };
     let retrieval_ms = t_ret.elapsed().as_millis();
 
     // A model that can go looking must not be told to stay put. An explicit
@@ -2176,8 +2362,19 @@ pub async fn run_chat_rag(
         .or(Some(if toolbox.is_some() { SYSTEM_CORE } else { DEFAULT_SYSTEM_PROMPT }));
     let mut messages = {
         let mut l = ledger.lock().expect("citation ledger poisoned");
-        build_rag_messages(query, &context, history, system, opts.max_context_chars, &mut l)
+        build_rag_messages(
+            query,
+            &context,
+            history,
+            system,
+            opts.max_context_chars,
+            &mut l,
+            !opts.seed,
+        )
     };
+    // The retrieved pack is the second system message; its size is the part
+    // of the prompt this question is responsible for.
+    let context_chars = messages.get(1).map(|m| m.content.chars().count()).unwrap_or(0);
 
     // Deliberation is what makes a model with tools actually use them.
     //
@@ -2207,6 +2404,7 @@ pub async fn run_chat_rag(
     let mut tool_usage = None;
     let mut tool_calls = 0;
     let mut tool_rounds = 0;
+    let mut tool_chars = 0usize;
     let mut hit_round_cap = false;
     let mut drafted = None;
     if let Some(tb) = toolbox {
@@ -2219,6 +2417,7 @@ pub async fn run_chat_rag(
         tool_usage = rounds.usage;
         tool_calls = rounds.calls;
         tool_rounds = rounds.rounds;
+        tool_chars = rounds.result_chars;
         hit_round_cap = tb.max_rounds > 0 && rounds.rounds >= tb.max_rounds;
         drafted = rounds.answer;
     }
@@ -2230,6 +2429,7 @@ pub async fn run_chat_rag(
         None => chat.complete(&messages).await?,
     };
     let completion_ms = t_cmp.elapsed().as_millis();
+    let cost = turn_cost(&answer, context_chars, tool_chars, ledger, repo_root);
 
     Ok(ChatRagOutcome {
         answer,
@@ -2242,6 +2442,7 @@ pub async fn run_chat_rag(
         tool_calls,
         tool_rounds,
         hit_round_cap,
+        cost,
     })
 }
 
@@ -2275,7 +2476,14 @@ where
         ledger,
     } = req;
     let t_ret = std::time::Instant::now();
-    let context = retrieve_context(store, embedder, repo_root, query, &opts).await?;
+    // Skipping the seed is not "no retrieval" — it hands the retrieval to the
+    // model, which searches in the codebase's own vocabulary instead of the
+    // user's. See `ChatRagOptions::seed`.
+    let context = if opts.seed {
+        retrieve_context(store, embedder, repo_root, query, &opts).await?
+    } else {
+        RankedContext { query: query.to_string(), items: Vec::new(), total_chars: 0, seed_id: None }
+    };
     let retrieval_ms = t_ret.elapsed().as_millis();
     on_context(&context);
 
@@ -2286,8 +2494,19 @@ where
         .or(Some(if toolbox.is_some() { SYSTEM_CORE } else { DEFAULT_SYSTEM_PROMPT }));
     let mut messages = {
         let mut l = ledger.lock().expect("citation ledger poisoned");
-        build_rag_messages(query, &context, history, system, opts.max_context_chars, &mut l)
+        build_rag_messages(
+            query,
+            &context,
+            history,
+            system,
+            opts.max_context_chars,
+            &mut l,
+            !opts.seed,
+        )
     };
+    // The retrieved pack is the second system message; its size is the part
+    // of the prompt this question is responsible for.
+    let context_chars = messages.get(1).map(|m| m.content.chars().count()).unwrap_or(0);
 
     // Deliberation is not a luxury for a model holding tools. `fast_client`
     // sends `enable_thinking: false`, and on a Qwen3-class template that does
@@ -2311,6 +2530,7 @@ where
     let mut tool_usage = None;
     let mut tool_calls = 0;
     let mut tool_rounds = 0;
+    let mut tool_chars = 0usize;
     let mut hit_round_cap = false;
     let mut drafted = None;
     if toolbox.is_some() {
@@ -2325,6 +2545,7 @@ where
         tool_usage = rounds.usage;
         tool_calls = rounds.calls;
         tool_rounds = rounds.rounds;
+        tool_chars = rounds.result_chars;
         hit_round_cap = tb.max_rounds > 0 && rounds.rounds >= tb.max_rounds;
         drafted = rounds.answer;
     }
@@ -2340,6 +2561,7 @@ where
             reasoning: (!d.reasoning.is_empty()).then(|| d.reasoning.clone()),
             ..Default::default()
         });
+        let cost = turn_cost(&d.content, context_chars, tool_chars, ledger, repo_root);
         return Ok(ChatRagOutcome {
             answer: d.content,
             reasoning: d.reasoning,
@@ -2351,6 +2573,7 @@ where
             tool_calls,
             tool_rounds,
             hit_round_cap,
+            cost,
         });
     }
 
@@ -2370,6 +2593,7 @@ where
         Err(e) => return Err(Box::new(e)),
     };
     let completion_ms = t_cmp.elapsed().as_millis();
+    let cost = turn_cost(&answer, context_chars, tool_chars, ledger, repo_root);
 
     Ok(ChatRagOutcome {
         answer,
@@ -2382,5 +2606,6 @@ where
         tool_calls,
         tool_rounds,
         hit_round_cap,
+        cost,
     })
 }

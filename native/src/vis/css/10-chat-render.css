@@ -335,6 +335,55 @@
         .chat-body .md-cite:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
         .chat-body .md-cite.dead { color: var(--text-dim); border-bottom: none; cursor: default; }
 
+        /* ─── Chat: what the turn cost ──────────────────────── */
+
+        details.chat-cost > summary {
+            letter-spacing: 0.04em;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 4px 0;
+            font-variant-numeric: tabular-nums;
+        }
+
+        details.chat-cost > summary:hover { color: var(--text-muted); }
+
+        .chat-cost .cost-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 10.5px;
+            color: var(--text-muted);
+            padding: 2px 0 2px 10px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Neither the billed total nor the comparison is a part of the sum
+           above them — the rule says "stop adding" so three unrelated
+           quantities are not read as a running total. */
+        .chat-cost .cost-row.sep {
+            border-top: 1px solid var(--border-soft);
+            margin-top: 5px;
+            padding-top: 6px;
+        }
+
+        /* The one exact number here: the endpoint counted it. */
+        .chat-cost .cost-row.sep:not(.baseline) { color: var(--text); }
+
+        .chat-cost .cost-row.baseline { color: var(--text-dim); }
+
+        .chat-cost .cost-note {
+            font-size: 9.5px;
+            line-height: 1.5;
+            color: var(--text-dim);
+            padding: 3px 0 2px 10px;
+        }
+
+        /* The last note is the global caveat, not a gloss on the row above. */
+        .chat-cost .cost-note:last-child {
+            padding-top: 7px;
+            font-style: italic;
+        }
+
         /* ─── Chat: collapsible citations + inspectable tools ── */
 
         details.chat-citations > summary {
