@@ -420,6 +420,45 @@ must('an MMR backend says so instead of claiming PageRank',
 
 console.log('narrating the loop');
 
+// The banner. It is the loudest thing in the panel, so it only appears when
+// the turn earned it and every number in it is one the rows below prove.
+const badgeMod = path.join(tmp, 'badge.mjs');
+fs.writeFileSync(badgeMod, `
+    function stubNode(tag) {
+        return {
+            tagName: tag, className: '', textContent: '', innerHTML: '', children: [],
+            append(...k) { this.children.push(...k); },
+            appendChild(k) { this.children.push(k); return k; },
+        };
+    }
+    const document = { createElement: stubNode };
+    ${lift(chatSrc, 'buildAgenticBadge')}
+    export { buildAgenticBadge };
+`);
+const A = await import(badgeMod);
+const badgeText = (done) => {
+    const b = A.buildAgenticBadge(done);
+    return b ? b.children.map(c => c.textContent + c.innerHTML).join(' ') : null;
+};
+
+must('a turn that queried nothing gets no banner',
+    badgeText({ tool_calls: 0, tool_rounds: 0 }) === null);
+const many = badgeText({ tool_calls: 3, tool_rounds: 2, citations: [1, 2, 3, 4] });
+must('the banner names the thing being sold', many.includes('Agentic graph RAG'));
+must('it counts the queries', many.includes('<b>3</b> graph queries'));
+must('it counts the rounds', many.includes('<b>2</b> rounds'));
+must('it counts what came back cited', many.includes('citing <b>4</b> nodes'));
+must('it credits the model, not the pipeline', many.includes('on its own'));
+// Singulars, because "1 graph queries across 1 rounds" reads as a bug.
+const one = badgeText({ tool_calls: 1, tool_rounds: 1, citations: [1] });
+must('one query reads as one query', one.includes('<b>1</b> graph query'));
+must('a single round is not announced', !one.includes('rounds'));
+must('one node reads as one node', one.includes('citing <b>1</b> node,') || one.includes('<b>1</b> node '));
+// A turn whose tools cited nothing must not claim citations.
+must('no citation clause when nothing was cited',
+    !badgeText({ tool_calls: 2, tool_rounds: 1, citations: [] }).includes('citing'));
+
+
 const toolsMod = path.join(tmp, 'tools.mjs');
 fs.writeFileSync(toolsMod, `
     function stubNode(tag) {

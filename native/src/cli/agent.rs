@@ -227,7 +227,7 @@ fn print_find_symbols_help() {
     println!("                       Class, Interface, Variable, File — {C_CYAN}ug graph_schema{C_RESET} lists them)");
     println!("  {C_CYAN}--file-prefix <p>{C_RESET}    Only symbols under this path: a prefix ({C_CYAN}src/auth/{C_RESET}) or a");
     println!("                       glob ({C_CYAN}src/**/*.ts{C_RESET})");
-    println!("  {C_CYAN}-k, --limit <n>{C_RESET}      Max hits per query (default 20)");
+    println!("  {C_CYAN}-k, --limit <n>{C_RESET}      Max hits per query (default 50)");
     println!("  {C_CYAN}--boundary{C_RESET}           Only system boundaries — REST handlers, queue listeners,");
     println!("                       CLI commands, outbound HTTP/DB clients. Works with no");
     println!("                       name at all, which lists the whole public surface.");

@@ -345,6 +345,59 @@
         .chat-body .md-cite:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
         .chat-body .md-cite.dead { color: var(--text-dim); border-bottom: none; cursor: default; }
 
+        /* ─── Chat: this answer drove the graph itself ───────── */
+
+        .agentic-badge {
+            display: flex;
+            align-items: flex-start;
+            gap: 7px;
+            margin: 10px 0 8px;
+            padding: 7px 10px 7px 8px;
+            border-left: 2px solid var(--accent);
+            border-radius: 0 6px 6px 0;
+            background: linear-gradient(
+                90deg,
+                rgba(var(--accent-rgb), 0.14),
+                rgba(var(--accent-rgb), 0.03) 70%,
+                transparent
+            );
+            /* One-shot, not infinite: a permanent animation on a panel that
+               sits still is half a core (Agents.md §9h). This ends. */
+            animation: agentic-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
+        @keyframes agentic-in {
+            from { opacity: 0; transform: translateX(-6px); }
+            to   { opacity: 1; transform: none; }
+        }
+
+        .agentic-badge .ab-bolt {
+            font-size: 12px;
+            line-height: 1.45;
+            filter: drop-shadow(0 0 5px rgba(var(--accent-rgb), 0.6));
+        }
+
+        .agentic-badge .ab-text {
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-soft);
+        }
+
+        /* The numbers are the point — they are what the rows below prove. */
+        .agentic-badge .ab-text b {
+            color: var(--accent-soft);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .agentic-badge .ab-lede {
+            color: var(--accent);
+            letter-spacing: 0.02em;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .agentic-badge { animation: none; }
+        }
+
         /* ─── Chat: what the turn cost ──────────────────────── */
 
         details.chat-cost > summary {
@@ -365,8 +418,7 @@
         .chat-cost {
             --seg-ev: var(--accent);
             --seg-fx: #7c8b9c;
-            --seg-rest: #4d5a69;
-            margin-top: 24px;
+            --seg-rest: #4d5a69;            
         }
 
         .chat-cost .cost-bar {

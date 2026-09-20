@@ -605,6 +605,7 @@ pub(crate) fn api_chat_stream(
                 emit_tool(
                     "tool",
                     serde_json::json!({
+                        "id": t.id,
                         "name": t.name,
                         "args": t.args,
                         "args_json": t.args_json,

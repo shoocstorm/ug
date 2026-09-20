@@ -46,7 +46,7 @@ pub struct FindSymbolsParams {
     pub boundary: bool,
 }
 
-const DEFAULT_SYMBOL_LIMIT: usize = 20;
+use super::DEFAULT_ROWS as DEFAULT_SYMBOL_LIMIT;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolQueryResult {

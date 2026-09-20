@@ -6175,6 +6175,59 @@
         .chat-body .md-cite:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
         .chat-body .md-cite.dead { color: var(--text-dim); border-bottom: none; cursor: default; }
 
+        /* ─── Chat: this answer drove the graph itself ───────── */
+
+        .agentic-badge {
+            display: flex;
+            align-items: flex-start;
+            gap: 7px;
+            margin: 10px 0 8px;
+            padding: 7px 10px 7px 8px;
+            border-left: 2px solid var(--accent);
+            border-radius: 0 6px 6px 0;
+            background: linear-gradient(
+                90deg,
+                rgba(var(--accent-rgb), 0.14),
+                rgba(var(--accent-rgb), 0.03) 70%,
+                transparent
+            );
+            /* One-shot, not infinite: a permanent animation on a panel that
+               sits still is half a core (Agents.md §9h). This ends. */
+            animation: agentic-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
+        @keyframes agentic-in {
+            from { opacity: 0; transform: translateX(-6px); }
+            to   { opacity: 1; transform: none; }
+        }
+
+        .agentic-badge .ab-bolt {
+            font-size: 12px;
+            line-height: 1.45;
+            filter: drop-shadow(0 0 5px rgba(var(--accent-rgb), 0.6));
+        }
+
+        .agentic-badge .ab-text {
+            font-size: 10.5px;
+            line-height: 1.5;
+            color: var(--text-soft);
+        }
+
+        /* The numbers are the point — they are what the rows below prove. */
+        .agentic-badge .ab-text b {
+            color: var(--accent-soft);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .agentic-badge .ab-lede {
+            color: var(--accent);
+            letter-spacing: 0.02em;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .agentic-badge { animation: none; }
+        }
+
         /* ─── Chat: what the turn cost ──────────────────────── */
 
         details.chat-cost > summary {
@@ -6196,6 +6249,7 @@
             --seg-ev: var(--accent);
             --seg-fx: #7c8b9c;
             --seg-rest: #4d5a69;
+            margin-top: 24px;
         }
 
         .chat-cost .cost-bar {
@@ -10316,7 +10370,7 @@ body:has(#info.visible) #perf-hud {
         }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.21","visFingerprint":"bfff7ec45719d250","generatedAt":1789910570};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.21","visFingerprint":"b920ea5a44b9b12d","generatedAt":1789912610};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -18092,6 +18146,34 @@ self.onmessage = async (ev) => {
             }
         }
 
+        // The one banner this panel gets, and only when it is earned.
+        //
+        // A reader who takes Answer for "Find with a paragraph on top" never
+        // opens the tool rows, so the thing that makes this different stays
+        // invisible. The numbers in it are the same ones the rows below
+        // substantiate — which is the whole reason it can be stated this
+        // loudly without being a claim.
+        function buildAgenticBadge(done) {
+            const calls = done.tool_calls || 0;
+            if (!calls) return null;          // not an agentic turn; say nothing
+            const rounds = Math.max(done.tool_rounds || 0, 1);
+            const cited = (done.citations || []).length;
+
+            const el = document.createElement('div');
+            el.className = 'agentic-badge';
+            const bolt = document.createElement('span');
+            bolt.className = 'ab-bolt';
+            bolt.textContent = '⚡';
+            const text = document.createElement('span');
+            text.className = 'ab-text';
+            const q = `<b>${calls}</b> graph quer${calls === 1 ? 'y' : 'ies'}`;
+            const r = rounds > 1 ? ` across <b>${rounds}</b> rounds` : '';
+            const c = cited ? `, citing <b>${cited}</b> node${cited === 1 ? '' : 's'}` : '';
+            text.innerHTML = `<b class="ab-lede">Agentic graph RAG</b> — the model ran ${q}${r}${c} to answer this, on its own.`;
+            el.append(bolt, text);
+            return el;
+        }
+
         // What the turn cost, and what the same evidence costs read whole.
         //
         // The comparison is the narrow, defensible one: the files these
@@ -18338,15 +18420,21 @@ self.onmessage = async (ev) => {
                     strip.querySelector('.cp-phase').textContent = t.state === 'done'
                         ? `${t.name} → ${t.summary || 'done'}`
                         : `Querying the graph · ${t.name}${queries > 1 ? ` (${queries})` : ''}…`;
+                    // Paired by the provider's call id, not by name+args: a
+                    // model that asks the same thing twice in one round —
+                    // which happens — produced two starts under one key, so
+                    // the first row was orphaned in its spinner state and the
+                    // second result built a third row nobody asked for.
+                    const key = t.id || (t.name + '|' + t.args);
                     if (t.state === 'done') {
                         // Upgrade the row we opened when the call started, so
                         // the user can read exactly what was asked and returned.
-                        const open = calls.get(t.name + '|' + t.args);
-                        if (open) { fillToolRow(open, t); calls.delete(t.name + '|' + t.args); }
+                        const open = calls.get(key);
+                        if (open) { fillToolRow(open, t); calls.delete(key); }
                         else el.insertBefore(buildToolRow(t), bodyEl);
                     } else {
                         const row = buildToolRow(t);
-                        calls.set(t.name + '|' + t.args, row);
+                        calls.set(key, row);
                         el.insertBefore(row, bodyEl);
                     }
                     if (nearBottom()) scroller.scrollTop = scroller.scrollHeight;
@@ -18378,9 +18466,13 @@ self.onmessage = async (ev) => {
                     // finished text is authoritative, so render it whole.
                     if (text) setMarkdown(bodyEl, text, cites);
                     else bodyEl.textContent = '(no answer)';
-                    // The summary goes first: it is the one line that says
-                    // what the whole turn cost, and reading it should not mean
-                    // scrolling past every tool call to reach it.
+                    // The badge leads, then the summary: it is the one line
+                    // that says what the whole turn cost, and reading it
+                    // should not mean scrolling past every tool call.
+                    if (done) {
+                        const badge = buildAgenticBadge({ ...done, citations: cites });
+                        if (badge) el.appendChild(badge);
+                    }
                     if (done && done.cost) el.appendChild(buildCostBox(done));
                     groupToolRows(el);
                     if (cites && cites.length) el.appendChild(buildCitationBox(cites));

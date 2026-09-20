@@ -706,6 +706,34 @@
             }
         }
 
+        // The one banner this panel gets, and only when it is earned.
+        //
+        // A reader who takes Answer for "Find with a paragraph on top" never
+        // opens the tool rows, so the thing that makes this different stays
+        // invisible. The numbers in it are the same ones the rows below
+        // substantiate — which is the whole reason it can be stated this
+        // loudly without being a claim.
+        function buildAgenticBadge(done) {
+            const calls = done.tool_calls || 0;
+            if (!calls) return null;          // not an agentic turn; say nothing
+            const rounds = Math.max(done.tool_rounds || 0, 1);
+            const cited = (done.citations || []).length;
+
+            const el = document.createElement('div');
+            el.className = 'agentic-badge';
+            const bolt = document.createElement('span');
+            bolt.className = 'ab-bolt';
+            bolt.textContent = '⚡';
+            const text = document.createElement('span');
+            text.className = 'ab-text';
+            const q = `<b>${calls}</b> graph quer${calls === 1 ? 'y' : 'ies'}`;
+            const r = rounds > 1 ? ` across <b>${rounds}</b> rounds` : '';
+            const c = cited ? `, citing <b>${cited}</b> node${cited === 1 ? '' : 's'}` : '';
+            text.innerHTML = `<b class="ab-lede">Agentic graph RAG</b> — the model ran ${q}${r}${c} to answer this, on its own.`;
+            el.append(bolt, text);
+            return el;
+        }
+
         // What the turn cost, and what the same evidence costs read whole.
         //
         // The comparison is the narrow, defensible one: the files these
@@ -952,15 +980,21 @@
                     strip.querySelector('.cp-phase').textContent = t.state === 'done'
                         ? `${t.name} → ${t.summary || 'done'}`
                         : `Querying the graph · ${t.name}${queries > 1 ? ` (${queries})` : ''}…`;
+                    // Paired by the provider's call id, not by name+args: a
+                    // model that asks the same thing twice in one round —
+                    // which happens — produced two starts under one key, so
+                    // the first row was orphaned in its spinner state and the
+                    // second result built a third row nobody asked for.
+                    const key = t.id || (t.name + '|' + t.args);
                     if (t.state === 'done') {
                         // Upgrade the row we opened when the call started, so
                         // the user can read exactly what was asked and returned.
-                        const open = calls.get(t.name + '|' + t.args);
-                        if (open) { fillToolRow(open, t); calls.delete(t.name + '|' + t.args); }
+                        const open = calls.get(key);
+                        if (open) { fillToolRow(open, t); calls.delete(key); }
                         else el.insertBefore(buildToolRow(t), bodyEl);
                     } else {
                         const row = buildToolRow(t);
-                        calls.set(t.name + '|' + t.args, row);
+                        calls.set(key, row);
                         el.insertBefore(row, bodyEl);
                     }
                     if (nearBottom()) scroller.scrollTop = scroller.scrollHeight;
@@ -992,9 +1026,13 @@
                     // finished text is authoritative, so render it whole.
                     if (text) setMarkdown(bodyEl, text, cites);
                     else bodyEl.textContent = '(no answer)';
-                    // The summary goes first: it is the one line that says
-                    // what the whole turn cost, and reading it should not mean
-                    // scrolling past every tool call to reach it.
+                    // The badge leads, then the summary: it is the one line
+                    // that says what the whole turn cost, and reading it
+                    // should not mean scrolling past every tool call.
+                    if (done) {
+                        const badge = buildAgenticBadge({ ...done, citations: cites });
+                        if (badge) el.appendChild(badge);
+                    }
                     if (done && done.cost) el.appendChild(buildCostBox(done));
                     groupToolRows(el);
                     if (cites && cites.length) el.appendChild(buildCitationBox(cites));

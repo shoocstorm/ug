@@ -304,6 +304,7 @@
             border-radius: 8px;
             background: var(--bg-surface);
             overflow: hidden;
+            margin-bottom: 24px;
         }
 
         /* The names block is rebuilt on every pause in typing, so it reads as

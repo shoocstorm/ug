@@ -212,7 +212,7 @@ pub(crate) fn run_graph_centrality(args: &[String]) -> CliResult {
     let (load_args, _pos) = analysis_input(args);
     let types = type_filter(args, &["-t", "--type"]);
     let file_prefix = flag_value(args, &["-f", "--file"]);
-    let top = limit_or(args, &["--top", "-l", "--limit"], 20);
+    let top = limit_or(args, &["--top", "-l", "--limit"], ultragraph::agent_tools::DEFAULT_ROWS);
 
     let (graph, _raw, _path) = load_agent_graph(&load_args)?;
     let centrality = calculate_centrality(&graph);
@@ -365,7 +365,7 @@ fn print_graph_centrality_help() {
     println!("  the shortest path between others (architectural bridges).");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}--top{C_RESET} <n>             Rows per ranking (default 20)");
+    println!("  {C_CYAN}--top{C_RESET} <n>             Rows per ranking (default 50)");
     println!("  {C_CYAN}-t, --type{C_RESET} <type>     Only rank these node types (repeatable)");
     println!("  {C_CYAN}-f, --file{C_RESET} <prefix>   Only rank nodes under this path prefix");
     print_graph_common_options();
@@ -383,7 +383,7 @@ fn print_graph_cycles_help() {
     println!("{C_BOLD}Usage:{C_RESET}  ug graph_cycles [options]");
     println!();
     println!("{C_BOLD}Options:{C_RESET}");
-    println!("  {C_CYAN}-l, --limit{C_RESET} <n>       Max cycles printed (default 20)");
+    println!("  {C_CYAN}-l, --limit{C_RESET} <n>       Max cycles printed (default 50)");
     println!("  {C_CYAN}--min-len{C_RESET} <n>         Only cycles with at least n nodes");
     println!("  {C_CYAN}--max-len{C_RESET} <n>         Only cycles with at most n nodes");
     println!("  {C_CYAN}-f, --file{C_RESET} <prefix>   Only cycles touching this path prefix");

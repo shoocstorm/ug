@@ -1200,6 +1200,10 @@ pub async fn run_search_tool(
 /// What happened during a tool-calling exchange, for progress reporting.
 #[derive(Clone, Debug)]
 pub struct ToolEvent {
+    /// The provider's id for this call. Two identical calls in one round have
+    /// different ids and the same name and arguments, so anything pairing a
+    /// start with its result needs this rather than the pair it can see.
+    pub id: String,
     pub name: String,
     /// Compact one-line rendering of the arguments.
     pub args: String,
@@ -1261,6 +1265,9 @@ where
     let mut calls = 0usize;
     let mut rounds = 0usize;
     let mut result_chars = 0usize;
+    // Answers this turn has already paid for, and the keys already served once.
+    let mut already_run: HashMap<String, Result<String, String>> = HashMap::new();
+    let mut repeated: HashSet<String> = HashSet::new();
     for _ in 0..toolbox.max_rounds {
         rounds += 1;
         let out = chat.complete_raw(&messages, Some(&toolbox.schemas)).await?;
@@ -1306,6 +1313,7 @@ where
         // whole round rather than revealing it one call at a time.
         for (call, (_, arg_line, args_json)) in out.tool_calls.iter().zip(&prepared) {
             on_event(ToolEvent {
+                id: call.id.clone(),
                 name: call.function.name.clone(),
                 args: arg_line.clone(),
                 args_json: args_json.clone(),
@@ -1314,35 +1322,77 @@ where
             });
         }
 
-        let results = run_round_calls(
-            toolbox.run,
-            out.tool_calls
-                .iter()
-                .zip(&prepared)
-                .map(|(call, (args, ..))| (call.function.name.clone(), args.clone()))
-                .collect(),
-        )
-        .await;
+        // A call this turn has already made, with exactly these arguments,
+        // has exactly this answer. Running it again buys nothing and the
+        // model does do it: observed asking `analyze long_functions
+        // min_loc=150` twice in a row, because the preset could not express
+        // the other half of the question and repeating it was the nearest
+        // thing to progress.
+        //
+        // Serving the memo is half the fix. The other half is *saying so* —
+        // a silent repeat teaches nothing, and the model spends its next
+        // round the same way.
+        let keys: Vec<String> = out
+            .tool_calls
+            .iter()
+            .zip(&prepared)
+            .map(|(call, (_, _, args_json))| format!("{}\u{0}{}", call.function.name, args_json))
+            .collect();
 
-        // Recorded in the order the model asked, not the order they finished:
-        // providers reject tool results that do not line up with the calls.
-        for ((call, (_, arg_line, args_json)), result) in
-            out.tool_calls.iter().zip(&prepared).zip(results)
+        // One pass decides what actually runs: anything this turn has not
+        // answered yet, and only the first of a duplicate pair within a round.
+        let mut fresh: Vec<(String, Value)> = Vec::new();
+        let mut fresh_keys: Vec<String> = Vec::new();
+        for ((call, (args, ..)), key) in out.tool_calls.iter().zip(&prepared).zip(&keys) {
+            if already_run.contains_key(key) || fresh_keys.contains(key) {
+                continue;
+            }
+            fresh_keys.push(key.clone());
+            fresh.push((call.function.name.clone(), args.clone()));
+        }
+
+        let ran = run_round_calls(toolbox.run, fresh).await;
+        for (key, result) in fresh_keys.into_iter().zip(ran) {
+            already_run.insert(key, result);
+        }
+        let results: Vec<Result<String, String>> = keys
+            .iter()
+            .map(|key| match already_run.get(key) {
+                Some(r) => r.clone(),
+                None => Err("tool did not run".to_string()),
+            })
+            .collect();
+
+        let mut seen_this_round: Vec<&str> = Vec::new();
+        for (((call, (_, arg_line, args_json)), result), key) in
+            out.tool_calls.iter().zip(&prepared).zip(results).zip(&keys)
         {
             calls += 1;
+            let repeat = repeated.contains(key) || seen_this_round.contains(&key.as_str());
+            seen_this_round.push(key);
+            repeated.insert(key.clone());
             let (text, summary) = match result {
                 Ok(t) => {
                     // Tokens, not lines: what this result costs is what the
                     // reader is deciding about, and a line of a table and a
                     // line of source are not the same price.
                     let tokens = crate::limits::est_tokens(t.chars().count());
-                    (t, format!("~{} tokens", fmt_thousands(tokens)))
+                    let label = format!("~{} tokens", fmt_thousands(tokens));
+                    if repeat {
+                        (
+                            format!("{}\n\n{}", REPEATED_CALL_NOTE, t),
+                            format!("repeat · {}", label),
+                        )
+                    } else {
+                        (t, label)
+                    }
                 }
                 Err(e) => (format!("Tool error: {}", e), format!("failed: {}", e)),
             };
             let text = clip_tool_result(&text, toolbox.max_result_chars);
             result_chars += text.chars().count();
             on_event(ToolEvent {
+                id: call.id.clone(),
                 name: call.function.name.clone(),
                 args: arg_line.clone(),
                 args_json: args_json.clone(),
@@ -1365,6 +1415,13 @@ where
     ));
     Ok(ToolRounds { messages, usage, calls, rounds, result_chars, answer: None })
 }
+
+/// What a model is told when it asks for something it already has.
+const REPEATED_CALL_NOTE: &str = "NOTE: you already ran this exact call with these exact \
+arguments earlier in this turn, so this is the same result as before — it has not been re-run. \
+Repeating a call cannot produce a different answer. If it did not answer the question, the \
+preset or arguments are the wrong shape for what you are asking: change the arguments, pick a \
+different tool, or write a `gql` query that expresses the whole question at once.";
 
 /// Run one round's tool calls concurrently, returning their results **in the
 /// order they were asked for**.
@@ -1643,6 +1700,23 @@ mod tests {
         assert!(
             elapsed < Duration::from_millis(250),
             "three 100ms calls took {elapsed:?} — they ran in series"
+        );
+    }
+
+    #[test]
+    fn a_repeated_call_is_told_it_is_a_repeat() {
+        // The note has to say *why* repeating cannot help and what to do
+        // instead. "You already ran this" alone leaves the model with no
+        // move other than trying again.
+        assert!(REPEATED_CALL_NOTE.contains("same result as before"));
+        assert!(REPEATED_CALL_NOTE.contains("has not been re-run"));
+        assert!(
+            REPEATED_CALL_NOTE.contains("cannot produce a different answer"),
+            "the model must be told repeating is futile, not merely noticed"
+        );
+        assert!(
+            REPEATED_CALL_NOTE.contains("gql"),
+            "and pointed at the escape hatch for a question no preset expresses"
         );
     }
 

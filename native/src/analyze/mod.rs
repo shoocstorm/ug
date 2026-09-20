@@ -142,7 +142,7 @@ pub struct QueryAnswer {
     pub next: &'static [(&'static str, &'static str)],
 }
 
-const DEFAULT_LIMIT: usize = 20;
+use ultragraph::agent_tools::DEFAULT_ROWS as DEFAULT_LIMIT;
 
 /// Every property a query may filter or aggregate on, for the capability
 /// manifest.

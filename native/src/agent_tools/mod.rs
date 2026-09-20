@@ -38,6 +38,18 @@ use crate::types::{BoundaryDirection, GraphData, GraphEdgeType, GraphNode, Graph
 /// per-turn sum is still unbounded (see `chat::DEFAULT_TOOL_RESULT_CHARS`).
 pub const DEFAULT_MAX_CHARS: usize = 60_000;
 
+/// Rows a listing shows before it starts paging.
+///
+/// One number for every listing, because a reader paging through `analyze`
+/// has no reason to expect a different window from `find_symbols`. Was 20 in
+/// four separate places, which is a page and a half of a terminal and turns
+/// an ordinary answer — 49 CLI boundaries, say — into three round trips.
+///
+/// It is a *display* window, not a query cap: the row totals a result reports
+/// are unaffected, and `--range` / `range` still page the rows the query
+/// already produced.
+pub const DEFAULT_ROWS: usize = 50;
+
 pub use crate::style::Render;
 
 /// Separator between sections of a batched call (one per node id / file /

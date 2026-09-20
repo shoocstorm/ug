@@ -225,7 +225,7 @@ fn print_analyze_help() {
     println!("  {C_CYAN}-p, --preset <name>{C_RESET}    Built-in question to run (also accepted as a positional)");
     println!("  {C_CYAN}-a, --arg <k=v>{C_RESET}        Preset argument, repeatable (e.g. --arg target=src/a.ts)");
     println!("  {C_CYAN}-g, --gql <query>{C_RESET}      Raw OverGraph GQL, when no preset fits");
-    println!("  {C_CYAN}-k, --limit <n>{C_RESET}        Rows to display (default 20) — shorthand for --range 1-N");
+    println!("  {C_CYAN}-k, --limit <n>{C_RESET}        Rows to display (default 50) — shorthand for --range 1-N");
     println!("  {C_CYAN}-r, --range <window>{C_RESET}   Which rows to show, 1-based and inclusive:");
     println!("                         {C_DIM}20 · 11-35 · 34-end{C_RESET} — page a result without re-reading it");
     println!("      {C_CYAN}--json{C_RESET}             Emit the machine-readable envelope (same shape as POST /api/tools/analyze)");
