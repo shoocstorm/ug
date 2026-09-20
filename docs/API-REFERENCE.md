@@ -129,7 +129,7 @@ stdout.
 
 | Command | Aliases | What it does | Key flags |
 |---------|---------|-------------|-----------|
-| `ug chat` | — | RAG-grounded chat: hybrid retrieval → LLM completion. One-shot (with prompt) or interactive REPL (no prompt). | `"<query>"` optional, `-k <limit>`, `--direction`, `-t <edge-type>`, `--filter`, `--max-chars`, `--no-snippets`, `--think`, `--no-tools`, `--max-tool-rounds`, `--chat-model`, `--chat-base-url`, `--chat-api-key`, `--temperature`, `--max-tokens`, `--chat-timeout`, `--system`, `--json`, `-v/--show-context`, embedding overrides, `-o <file>` |
+| `ug chat` | — | Agentic RAG chat: the model holds the graph toolbox, deliberates, and retrieves for itself — **no hybrid pass runs before it does**. `--no-tools` takes the fast path (one hybrid pass, one completion). One-shot (with prompt) or interactive REPL (no prompt). | `"<query>"` optional, `-k <limit>`, `--direction`, `-t <edge-type>`, `--filter`, `--max-chars`, `--no-snippets`, `--seed`, `--think`, `--no-tools`, `--max-tool-rounds` (default 8, max 16), `--chat-model`, `--chat-base-url`, `--chat-api-key`, `--temperature`, `--max-tokens`, `--chat-timeout` (default 900), `--system`, `--json`, `-v/--show-context`, embedding overrides, `-o <file>` |
 | `ug tour` | — | Guided, narrated walkthrough — uses LLM to plan stops through the graph, flies the camera in the web UI. | `"<topic>"` optional, `-n <name>`, `--max-stops <n>` (default 8, max 25), `--no-llm`, `--chat-model`, `--chat-base-url`, `--chat-api-key`, `--temperature`, `--max-tokens`, tour-specific flags |
 
 ### 1.6 Project Management
@@ -380,8 +380,8 @@ which case the page uses its built-ins:
 
 | Method | Path | What it does | Data source | Returns 503 when |
 |--------|------|-------------|--------------|------------------|
-| POST | `/api/chat` | RAG chat. Body: `{ "message", "history", "k", "direction", "edgeTypes", "repoRoot", "model", "baseUrl", "apiKey", "temperature", "maxTokens", "system", "tools", "stream", ... }` — non-streaming by default; `"stream": true` switches to an SSE response (`event: context` / `delta` / `done` / terminal `error`) | DB + embedder + chat LLM | Chat endpoint not configured |
-| GET | `/api/chat/config` | Get the server's default chat configuration | Config |
+| POST | `/api/chat` | Agentic RAG chat — **the model decides what to retrieve; nothing is searched first**. Body: `{ "query", "history", "k", "hops", "direction", "edge_types", "tools", "seed", "think", "max_tool_rounds", "chat_model", "chat_base_url", "chat_api_key", "temperature", "max_tokens", "system_prompt", "dest", "stream", ... }`. Returns `answer`, `citations`, `tool_calls`, `tool_rounds`, `hit_round_cap`, `cost`, `usage`. Non-streaming by default; `"stream": true` switches to SSE (`event: context` / `citations` / `tool` / `delta` / `done` / terminal `error`) | DB + embedder + chat LLM | Chat endpoint not configured |
+| GET | `/api/chat/config` | What a turn is actually made of: how it decides what to look up, the system prompt, the tool schemas, and the defaults that decide whether it is agentic at all (`seed`, `think`, `tool_rounds`) | Config |
 | POST | `/api/tour` | Guided tour. Body: `{ "topic", "projectName", "maxStops", "model", "stream", ... }` → plan → candidates → narration + links — non-streaming by default; `"stream": true` narrates itself over SSE (`event: progress` per phase, then `tour`, or terminal `error`) | DB + embedder + chat LLM | See tour opts |
 | GET | `/api/git/status` | Can this project be walked? `{ "available", "repo": { "root", "branch", "head", "head_subject", "dirty", "staged", "default_branch" } }`, or `{ "available": false, "code", "error", "hint" }` | git | **Never** — always 200; see below |
 | GET | `/api/git/commits` | Recent commits for a picker: `?limit=30&rev=<ref>` → `{ "commits": [{ "sha", "short", "subject", "author", "relative", "date", "files", "insertions", "deletions" }] }` | git | git unavailable, or no commits |

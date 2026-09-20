@@ -527,7 +527,7 @@ function:native/src/cli/gen.rs:run_gen                                   <span c
   <div class="table-wrap">
     <table>
       <tr><th>Command</th><th>What it does</th><th>Key flags</th></tr>
-      <tr><td><code>ug chat</code></td><td>RAG-grounded chat: hybrid retrieval → LLM completion. One-shot or interactive REPL.</td><td><code>"&lt;query&gt;"</code> <code>-k</code> <code>--direction</code> <code>-t</code> <code>--filter</code> <code>--think</code> <code>--chat-model</code> <code>--system</code> <code>--json</code></td></tr>
+      <tr><td><code>ug chat</code></td><td>Agentic RAG chat: the model holds the graph toolbox and retrieves for itself — no hybrid pass runs before it does. <code>--no-tools</code> takes the fast path. One-shot or interactive REPL.</td><td><code>"&lt;query&gt;"</code> <code>-k</code> <code>--direction</code> <code>-t</code> <code>--filter</code> <code>--seed</code> <code>--no-tools</code> <code>--max-tool-rounds</code> <code>--chat-model</code> <code>--system</code> <code>--json</code></td></tr>
       <tr><td><code>ug tour</code></td><td>Guided, narrated walkthrough — LLM plans stops, flies the camera in web UI.</td><td><code>"&lt;topic&gt;"</code> <code>-n</code> <code>--max-stops</code> <code>--no-llm</code> <code>--chat-model</code></td></tr>
     </table>
   </div>
@@ -738,8 +738,8 @@ function:native/src/cli/gen.rs:run_gen                                   <span c
   <div class="table-wrap">
     <table>
       <tr><th>Method</th><th>Path</th><th>What it does</th><th>503 when</th></tr>
-      <tr><td><code>POST</code></td><td><code>/api/chat</code></td><td>RAG chat. Non-streaming by default; <code>{"stream": true}</code> in the body switches to an SSE response (<code>context</code> / <code>delta</code> / <code>done</code> events)</td><td>Chat endpoint not configured</td></tr>
-      <tr><td><code>GET</code></td><td><code>/api/chat/config</code></td><td>Get the server's default chat configuration</td><td>—</td></tr>
+      <tr><td><code>POST</code></td><td><code>/api/chat</code></td><td>Agentic RAG chat — the model decides what to retrieve; nothing is searched first. Returns <code>answer</code>, <code>citations</code>, <code>tool_calls</code>, <code>tool_rounds</code>, <code>hit_round_cap</code>, <code>cost</code>. Non-streaming by default; <code>{"stream": true}</code> switches to SSE (<code>context</code> / <code>citations</code> / <code>tool</code> / <code>delta</code> / <code>done</code>)</td><td>Chat endpoint not configured</td></tr>
+      <tr><td><code>GET</code></td><td><code>/api/chat/config</code></td><td>What a turn is made of: how it decides what to look up, the system prompt, the tool schemas, and the defaults that decide whether it is agentic (<code>seed</code>, <code>think</code>, <code>tool_rounds</code>)</td><td>—</td></tr>
       <tr><td><code>POST</code></td><td><code>/api/tour</code></td><td>Guided tour. Non-streaming by default; <code>{"stream": true}</code> switches to SSE (<code>progress</code> / stop events as the LLM plans)</td><td>See tour opts</td></tr>
     </table>
   </div>

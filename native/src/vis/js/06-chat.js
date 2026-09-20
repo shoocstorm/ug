@@ -93,7 +93,7 @@
             const runBtn = document.getElementById('ask-run');
 
             state.chatInFlight = true;
-            setAskStatus('Retrieving context…');
+            setAskStatus('Working out what to look up…');
             runBtn.disabled = true;
 
             const t0 = performance.now();
@@ -113,7 +113,7 @@
                         switch (name) {
                             case 'phase':
                                 turn.phase(payload.phase === 'retrieving'
-                                    ? 'Searching the graph…' : payload.phase);
+                                    ? 'Working out what to look up…' : payload.phase);
                                 break;
                             case 'context':
                                 cites = payload.citations || [];
@@ -226,7 +226,7 @@
 
             // ── retrieval ──
             const r = cfg.retrieval || {};
-            section('Retrieval');
+            section('How it decides what to look up');
             const sum = document.createElement('p');
             sum.className = 'setup-note';
             sum.textContent = r.summary || '';
@@ -248,18 +248,63 @@
             const facts = document.createElement('div');
             facts.className = 'setup-facts';
             const dflt = r.defaults || {};
+            // Each chip says what the setting *is*; the tooltip says what it
+            // does and which way it is wrong to move it. A row of nine bare
+            // numbers is a row nobody can act on — "hops 2" and "tool rounds
+            // 8" are equally opaque until something says what they bound.
+            //
+            // The copy lives here rather than in /api/chat/config because it
+            // describes this panel's own summary of the defaults; the payload
+            // already carries the full prose in `stages`.
+            const ranked = (r.strategy || '').toLowerCase() === 'mmr'
+                ? 'This backend has no native PageRank, so hits are reranked for relevance against '
+                  + 'diversity instead of expanded through the graph.'
+                : 'Personalized PageRank over the edge graph: a node neighbouring several good hits '
+                  + 'outranks a single lucky match, which is what makes this more than vector search.';
             [
-                ['store', r.backend || '—'],
-                ['ranking', (r.strategy || '').toUpperCase()],
-                ['k', dflt.k],
-                ['hops', dflt.hops],
-                ['context budget', dflt.max_context_chars ? `${Math.round(dflt.max_context_chars / 1000)}k chars` : '—'],
-            ].forEach(([k, v]) => {
+                ['store', r.backend || '—',
+                 'Which graph store answered. `overgraph` is the embedded default; a Neo4j '
+                 + 'destination reports itself here instead.'],
+                ['ranking', (r.strategy || '').toUpperCase(), ranked],
+                ['k', dflt.k,
+                 'How many nodes one search keeps. Wider costs tokens and buries the good hits; '
+                 + 'the model can ask for a different k on any call.'],
+                ['hops', dflt.hops,
+                 'How far the graph walk expands from each seed hit. 0 returns only what matched '
+                 + 'the query directly — which is why a walk finds code your wording never named.'],
+                ['context budget', dflt.max_context_chars ? `${Math.round(dflt.max_context_chars / 1000)}k chars` : '—',
+                 'Ceiling on one assembled retrieval pack. Past it the lowest-ranked items are '
+                 + 'dropped whole rather than a snippet being cut in half.'],
+                // The three that decide whether a turn is agentic at all —
+                // and the pair whose defaults were invisible while one of
+                // them was silently switching the toolbox off.
+                ['search before asking', dflt.seed === undefined ? null : (dflt.seed ? 'yes' : 'no'),
+                 'Whether one hybrid retrieval runs on your exact wording before the model speaks. '
+                 + 'Off while it has tools: it searches for itself, in the vocabulary the codebase '
+                 + 'uses rather than yours, so a pre-pass is a second and worse-phrased copy of the '
+                 + 'same neighbourhood. Turning tools off turns this back on.'],
+                ['deliberates', dflt.think === undefined ? null : (dflt.think ? 'yes' : 'no'),
+                 'Whether the model may think before answering. It follows the toolbox, because a '
+                 + 'model given no room to deliberate answers from whatever it was handed: measured '
+                 + 'over 12 questions, with this off it made zero tool calls.'],
+                ['tool rounds', dflt.tool_rounds,
+                 'Most rounds of tool calls before it must answer. Calls inside one round run '
+                 + 'together; rounds are sequential, so this is also a latency ceiling. The answer '
+                 + 'says when it stopped because it ran out rather than because it was done.'],
+                ['per tool result', dflt.tool_result_chars ? `${Math.round(dflt.tool_result_chars / 1000)}k chars` : null,
+                 'Ceiling on what one tool call may add to the prompt. Nothing caps the total '
+                 + 'across rounds, so lower this for a model with a short context window rather '
+                 + 'than trusting the cap to protect you.'],
+            ].forEach(([k, v, why]) => {
                 if (v == null) return;
                 const chip = document.createElement('span');
                 chip.innerHTML = '<b></b><i></i>';
                 chip.querySelector('b').textContent = k;
                 chip.querySelector('i').textContent = v;
+                if (why) {
+                    chip.title = `${k}: ${why}`;
+                    chip.className = 'has-why';
+                }
                 facts.appendChild(chip);
             });
             box.appendChild(facts);
@@ -564,7 +609,7 @@
                 // them tells you how the answer was reached.
                 const none = document.createElement('div');
                 none.className = 'chat-notools';
-                none.textContent = 'No tool calls — answered from the retrieved sources alone';
+                none.textContent = 'Answered without querying the graph — it already had enough';
                 el.appendChild(none);
                 return;
             }
@@ -573,7 +618,12 @@
             group.open = !!state.chatToolsOpen;
             group.addEventListener('toggle', () => { state.chatToolsOpen = group.open; });
             const sum = document.createElement('summary');
-            sum.textContent = `${rows.length} tool call${rows.length === 1 ? '' : 's'} — inspect parameters and responses`;
+            // "2 tool calls" describes a mechanism; what the reader is
+            // looking at is the model having gone and searched the graph on
+            // its own, which is the whole difference from one-shot RAG.
+            sum.textContent = rows.length === 1
+                ? 'The model queried the graph once — see what it asked and got back'
+                : `The model queried the graph ${rows.length} times — see what it asked and got back`;
             group.appendChild(sum);
             rows.forEach(r => { r.open = false; group.appendChild(r); });
             el.appendChild(group);
@@ -668,16 +718,81 @@
             const box = document.createElement('details');
             box.className = 'chat-cost';
 
+            // Name the section before quoting a number at it. "~2,085 tokens
+            // of evidence" was a statistic with no subject: it did not say it
+            // was about token cost, and "evidence" did not say which of the
+            // four quantities inside it meant. Lead with the exact figure the
+            // endpoint charged, then what of it was retrieval, then the
+            // comparison — each clause dropped when it does not apply.
             const sum = document.createElement('summary');
-            sum.textContent = cost.saved_ratio
-                ? `~${n(cost.sent_tokens)} tokens of evidence · ${cost.saved_ratio}× smaller than the files it came from`
-                : `~${n(cost.sent_tokens)} tokens of evidence`;
+            const headline = ['Token cost'];
+            const billedNow = (done.usage && done.usage.total_tokens) || 0;
+            if (billedNow) headline.push(`${n(billedNow)} billed`);
+            headline.push(`~${n(cost.sent_tokens)} of it retrieved`);
+            if (cost.saved_ratio) {
+                headline.push(`${cost.saved_ratio}× less than those files whole`);
+            }
+            sum.textContent = headline.join(' · ');
             box.appendChild(sum);
 
-            const row = (label, value, cls) => {
+            // Where the bill went, as one proportion bar.
+            //
+            // An *emphasis* chart, not a categorical one: the story is that
+            // the evidence is the small part, so it takes the page's accent
+            // and everything else is de-emphasised grey. Three segments is
+            // also the most this surface can honestly carry — the teal ramp's
+            // adjacent steps measure ΔE 6.4 to normal vision, far under the
+            // floor of 15, so a five-colour stack of them would be a stack
+            // nobody could read. The itemised rows below are the legend and
+            // the table view the contrast WARN obliges.
+            const rounds0 = Math.max(done.tool_rounds || 0, 1);
+            const evidence = cost.sent_tokens || 0;
+            const fixed = (cost.fixed_tokens || 0) * rounds0;
+            const billedTotal = (done.usage && done.usage.total_tokens) || 0;
+            // What the endpoint charged beyond what we can attribute: the
+            // conversation re-sent, and the gap between our estimate and its
+            // tokenizer. Never negative — an estimate that overshoots is not
+            // evidence of a negative quantity.
+            const rest = Math.max(billedTotal - evidence - fixed, 0);
+            const segs = [
+                ['ev', 'This question', evidence],
+                ['fx', rounds0 > 1 ? `Fixed overhead × ${rounds0}` : 'Fixed overhead', fixed],
+                ['rest', 'Conversation re-sent', rest],
+            ].filter(([, , v]) => v > 0);
+
+            if (segs.length > 1) {
+                const bar = document.createElement('div');
+                bar.className = 'cost-bar';
+                bar.setAttribute('role', 'img');
+                bar.setAttribute('aria-label', segs
+                    .map(([, label, v]) => `${label}: about ${n(v)} tokens`).join('; '));
+                segs.forEach(([cls, label, v]) => {
+                    const seg = document.createElement('span');
+                    seg.className = `seg ${cls}`;
+                    seg.style.flexGrow = String(v);
+                    seg.title = `${label} — ~${n(v)} tokens`;
+                    bar.appendChild(seg);
+                });
+                box.appendChild(bar);
+
+                const key = document.createElement('div');
+                key.className = 'cost-key';
+                segs.forEach(([cls, label, v]) => {
+                    const item = document.createElement('span');
+                    item.className = 'key-item';
+                    item.innerHTML = `<i class="dot ${cls}"></i>`;
+                    item.appendChild(document.createTextNode(
+                        `${label} ~${n(v)}`));
+                    key.appendChild(item);
+                });
+                box.appendChild(key);
+            }
+
+            const row = (label, value, cls, key) => {
                 const r = document.createElement('div');
                 r.className = 'cost-row' + (cls ? ' ' + cls : '');
-                r.innerHTML = `<span>${escapeHtml(label)}</span><span>${escapeHtml(value)}</span>`;
+                const dot = key ? `<i class="dot ${key}"></i>` : '';
+                r.innerHTML = `<span>${dot}${escapeHtml(label)}</span><span>${escapeHtml(value)}</span>`;
                 box.appendChild(r);
             };
             const note = (text) => {
@@ -688,26 +803,38 @@
             };
 
             // 1. What this question put in front of the model.
-            row('Retrieved pack', `~${n(cost.context_tokens)}`);
-            row('Tool results', `~${n(cost.tool_tokens)}`);
-            row('Answer', `~${n(cost.answer_tokens)}`);
+            // A pack of zero is not a small pack — with no seed pass there
+            // was none, and a `~41` row read as a tiny retrieval instead.
+            if (cost.context_tokens) row('Retrieved pack', `~${n(cost.context_tokens)}`, null, 'ev');
+            row('Tool results', `~${n(cost.tool_tokens)}`, null, 'ev');
+            row('Answer', `~${n(cost.answer_tokens)}`, null, 'ev');
 
-            // 2. What the endpoint actually charged. A different question, and
+            // 2. What every turn pays whatever you asked. Itemised because it
+            // is usually *larger* than the evidence — the tool schemas alone
+            // ran 9,200 tokens on this repo — and because a fixed cost paid
+            // per round is the whole reason the billed total looks wrong.
+            const rounds = Math.max(done.tool_rounds || 0, 1);
+            if (cost.fixed_tokens) {
+                row('System prompt', `~${n(cost.system_tokens)}`, 'sep', 'fx');
+                if (cost.schema_tokens) row('Tool schemas', `~${n(cost.schema_tokens)}`, null, 'fx');
+                if (rounds > 1) {
+                    row(`Re-sent on each of ${rounds} rounds`,
+                        `~${n(cost.fixed_tokens * rounds)}`, 'subtle');
+                }
+            }
+
+            // 3. What the endpoint actually charged. A different question, and
             // always the larger one — which is exactly why it needs saying
             // rather than sitting unlabelled in the meta line as `tokens=`.
             const billed = done.usage && done.usage.total_tokens;
             if (billed) {
                 row('Billed by the model', n(billed), 'sep');
-                const rounds = done.tool_rounds || 0;
-                note(rounds > 1
-                    ? `Counted by your endpoint, not estimated. Larger than the evidence above because `
-                      + `the system prompt, the tool schemas and the whole conversation are re-sent on `
-                      + `each of the ${rounds} rounds.`
-                    : 'Counted by your endpoint, not estimated. Larger than the evidence above because '
-                      + 'it also includes the system prompt, the tool schemas and the question itself.');
+                note('Counted by your endpoint, not estimated. The fixed cost above is paid again '
+                    + 'every round, along with the conversation so far — that is most of the gap '
+                    + 'between it and the evidence.');
             }
 
-            // 3. The comparison — not part of this turn's bill at all.
+            // 4. The comparison — not part of this turn's bill at all.
             if (cost.whole_files) {
                 row(`${cost.whole_files} cited file${cost.whole_files === 1 ? '' : 's'}, read whole`,
                     `~${n(cost.whole_file_tokens)}`, 'sep baseline');
@@ -734,7 +861,12 @@
 
             const strip = document.createElement('div');
             strip.className = 'chat-progress';
-            strip.innerHTML = '<span class="tour-spinner"></span><span class="cp-phase">Searching the graph…</span>'
+            // What the strip says is the only account of the loop a reader
+            // gets while it runs, and it described the pipeline that came
+            // before this one: "Searching the graph…" on a turn that has not
+            // searched, then "Writing the answer…" while it was still
+            // deciding what to read.
+            strip.innerHTML = '<span class="tour-spinner"></span><span class="cp-phase">Working out what to look up…</span>'
                 + '<span class="cp-stats"></span>';
             const bodyEl = document.createElement('div');
             bodyEl.className = 'chat-body';
@@ -757,6 +889,7 @@
             const t0 = performance.now();
             let chars = 0, reasoningChars = 0, citeCount = 0, retrievalMs = null;
             const calls = new Map();   // in-flight tool rows, keyed by name+args
+            let queries = 0;           // graph queries the model has run
             let raw = '';              // everything the model has sent
             let frozen = 0;            // raw[0..frozen) is rendered and left alone
             let frame = 0;             // pending render, if any
@@ -809,12 +942,16 @@
                     citeCount = cites.length;
                     liveCites = cites || [];
                     retrievalMs = ms;
-                    strip.querySelector('.cp-phase').textContent = 'Writing the answer…';
+                    strip.querySelector('.cp-phase').textContent = cites.length
+                        ? 'Reading what it found…'
+                        : 'Working out what to look up…';
                     stats();
                 },
                 tool(t) {
-                    strip.querySelector('.cp-phase').textContent =
-                        t.state === 'done' ? `${t.name} → ${t.summary || 'done'}` : `Calling ${t.name}…`;
+                    if (t.state !== 'done') queries += 1;
+                    strip.querySelector('.cp-phase').textContent = t.state === 'done'
+                        ? `${t.name} → ${t.summary || 'done'}`
+                        : `Querying the graph · ${t.name}${queries > 1 ? ` (${queries})` : ''}…`;
                     if (t.state === 'done') {
                         // Upgrade the row we opened when the call started, so
                         // the user can read exactly what was asked and returned.

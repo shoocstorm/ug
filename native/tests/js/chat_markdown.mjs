@@ -218,11 +218,16 @@ fs.writeFileSync(costMod, `
     function escapeHtml(t) { return String(t == null ? '' : t); }
     function stubNode(tag) {
         return {
-            tagName: tag, className: '', textContent: '', innerHTML: '', children: [],
+            tagName: tag, className: '', textContent: '', innerHTML: '', title: '',
+            style: {}, children: [], _attrs: {},
+            setAttribute(k, v) { this._attrs[k] = v; },
             appendChild(k) { this.children.push(k); return k; },
         };
     }
-    const document = { createElement: stubNode };
+    const document = {
+        createElement: stubNode,
+        createTextNode: (t) => ({ tagName: '#text', textContent: t, innerHTML: '', children: [] }),
+    };
     ${lift(chatSrc, 'buildCostBox')}
     export { buildCostBox };
 `);
@@ -236,6 +241,7 @@ const DONE = {
         context_tokens: 10256, tool_tokens: 16935, answer_tokens: 1619,
         sent_tokens: 27191, whole_files: 9, whole_file_tokens: 90108,
         saved_ratio: 3.3,
+        system_tokens: 790, schema_tokens: 9200, fixed_tokens: 9990,
     },
     usage: { total_tokens: 90168 },
     tool_rounds: 3,
@@ -244,6 +250,16 @@ const DONE = {
 const nodes = render(DONE);
 const text = nodes.map(n => n.textContent + ' ' + n.innerHTML).join('\n');
 const rowFor = (label) => nodes.find(n => String(n.innerHTML).includes(label));
+
+const summary = nodes.find(x => x.tagName === 'summary');
+must('the collapsed line says what it is about',
+    !!summary && summary.textContent.startsWith('Token cost'));
+must('the collapsed line leads with the exact figure',
+    !!summary && summary.textContent.includes('90,168 billed'));
+must('the collapsed line says what the estimate covers',
+    !!summary && summary.textContent.includes('~27,191 of it retrieved'));
+must('the collapsed line carries the comparison',
+    !!summary && summary.textContent.includes('3.3× less than those files whole'));
 
 must('the parts of the question are listed', ['Retrieved pack', 'Tool results', 'Answer']
     .every(l => rowFor(l)));
@@ -254,7 +270,29 @@ must("the endpoint's own total is labelled", !!rowFor('Billed by the model'));
 must('the billed figure is exact, not marked with ~',
     text.includes('>90,168<') && !text.includes('~90,168'));
 must('why billed exceeds the evidence is explained',
-    text.includes('re-sent') && text.includes('3 rounds'));
+    text.includes('paid again') && text.includes('every round'));
+
+// The fixed cost is what makes the billed total make sense: the tool schemas
+// alone measured 9,200 tokens on this repo, re-sent on every round.
+// The proportion bar: an emphasis chart, three segments at most.
+const bar = nodes.find(x => x.className === 'cost-bar');
+must('the bill is drawn as a proportion bar', !!bar);
+must('every segment is labelled in text, not colour alone',
+    !!bar && bar.children.every(seg => seg.title.includes('tokens')));
+must('the bar is described for a screen reader',
+    !!bar && String(bar._attrs && bar._attrs['aria-label'] || '').includes('This question'));
+must('segments are sized by value, not drawn equal',
+    !!bar && new Set(bar.children.map(seg => seg.style.flexGrow)).size > 1);
+must('the fixed overhead is multiplied by the rounds',
+    text.includes('Fixed overhead × 3'));
+// billed 90,168 − evidence 27,191 − fixed 29,970 = 33,007
+must('what is billed beyond the estimate is shown, not hidden',
+    text.includes('Conversation re-sent'));
+
+must('the system prompt is sized', !!rowFor('System prompt') && text.includes('~790'));
+must('the tool schemas are sized', !!rowFor('Tool schemas') && text.includes('~9,200'));
+must('the per-round multiple is shown',
+    text.includes('Re-sent on each of 3 rounds') && text.includes('~29,970'));
 
 // …and the baseline is not one of the parts, nor part of the bill.
 const baseline = rowFor('cited file');
@@ -270,9 +308,166 @@ const bare = render({ cost: { context_tokens: 10, tool_tokens: 0, answer_tokens:
 const bareText = bare.map(n => n.textContent + ' ' + n.innerHTML).join('\n');
 must('no billed row without a provider count', !bareText.includes('Billed by the model'));
 must('no comparison without a measured file', !bareText.includes('read whole'));
+// Each clause of the headline is dropped when it has nothing to say.
+const bareSummary = bare.find(x => x.tagName === 'summary').textContent;
+must('no billed clause without a provider count', !bareSummary.includes('billed'));
+must('no comparison clause without a measured file', !bareSummary.includes('less than'));
+must('the headline still names itself', bareSummary.startsWith('Token cost'));
+must('no overhead rows when nothing reported them', !bareText.includes('Tool schemas'));
+
+// A tools-off turn is one round: the multiple would read as ×1 and mean nothing.
+const oneRound = render({ ...DONE, tool_rounds: 1 }).map(x => x.innerHTML).join('\n');
+must('no per-round multiple on a single-round turn', !oneRound.includes('Re-sent on each'));
+must('the fixed rows still show on a single-round turn', oneRound.includes('System prompt'));
+
+// ── 7. The settings panel explains itself ────────────────────────────────────
+//
+// Nine bare numbers — "hops 2", "tool rounds 8" — say what a setting is and
+// nothing about what it bounds or which way it is wrong to move it. Two of
+// them (`search before asking`, `deliberates`) are the defaults that decide
+// whether a turn is agentic at all, and both were invisible for months.
+
+console.log('explaining the settings');
+
+const setupMod = path.join(tmp, 'setup.mjs');
+fs.writeFileSync(setupMod, `
+    function escapeHtml(t) { return String(t == null ? '' : t); }
+    function nodeIconSvg() { return ''; }
+    function stubNode(tag) {
+        const n = {
+            tagName: tag, className: '', textContent: '', innerHTML: '', title: '',
+            style: {}, children: [], dataset: {},
+            appendChild(k) { this.children.push(k); return k; },
+            append(...k) { this.children.push(...k); },
+            querySelector(sel) {
+                const want = sel.replace('.', '');
+                return this.children.find(c => c.tagName === want || c.className === want)
+                    || stubNode(want);
+            },
+        };
+        return n;
+    }
+    const document = { createElement: stubNode, createTextNode: (t) => ({ textContent: t }) };
+    // Only the fact chips are under test here; the prompt and tool blocks
+    // have their own renderers and their own reasons to change.
+    function copyBlock() { return stubNode('div'); }
+    ${lift(chatSrc, 'renderChatSetup')}
+    export { renderChatSetup };
+`);
+const S = await import(setupMod);
+
+const panel = stubBox();
+function stubBox() {
+    const n = {
+        tagName: 'div', className: '', textContent: '', innerHTML: '', title: '',
+        children: [], style: {}, dataset: {},
+        appendChild(k) { this.children.push(k); return k; },
+        append(...k) { this.children.push(...k); },
+        querySelector() { return stubBox(); },
+    };
+    return n;
+}
+S.renderChatSetup(panel, {
+    retrieval: {
+        backend: 'overgraph', strategy: 'ppr', summary: 's', stages: [],
+        defaults: {
+            k: 8, hops: 2, max_context_chars: 60000,
+            seed: false, think: true, tool_rounds: 8, tool_result_chars: 60000,
+        },
+    },
+    system_prompt: 'sys', tools: [],
+});
+
+const all = (node) => [node, ...node.children.flatMap(all)];
+const chips = all(panel).filter(x => x.title && x.title.includes(':'));
+const tip = (name) => (chips.find(c => c.title.startsWith(name + ':')) || {}).title || '';
+
+must('every setting carries an explanation', chips.length >= 9);
+must('k says what widening costs', tip('k').includes('costs tokens'));
+must('hops says what 0 would mean', tip('hops').includes('0 returns only'));
+must('the ranking tooltip matches the backend that answered',
+    tip('ranking').includes('Personalized PageRank') && !tip('ranking').includes('no native'));
+// The two that decide whether the turn is agentic.
+must('search-before-asking explains why it is off',
+    tip('search before asking').includes('vocabulary the codebase'));
+must('deliberates cites the measurement behind the default',
+    tip('deliberates').includes('zero tool calls'));
+must('tool rounds names the latency it bounds', tip('tool rounds').includes('latency'));
+must('per-tool-result warns that nothing caps the total',
+    tip('per tool result').includes('Nothing caps the total'));
+must('a chip with an explanation is marked as hoverable',
+    chips.every(c => String(c.className).includes('has-why')));
+
+// An MMR backend must not be described as running PageRank.
+const mmrPanel = stubBox();
+S.renderChatSetup(mmrPanel, {
+    retrieval: { backend: 'neo4j', strategy: 'mmr', summary: 's', stages: [], defaults: { k: 8 } },
+    system_prompt: 'sys', tools: [],
+});
+const mmrTip = (all(mmrPanel).find(c => c.title && c.title.startsWith('ranking:')) || {}).title || '';
+must('an MMR backend says so instead of claiming PageRank',
+    mmrTip.includes('no native PageRank') && !mmrTip.includes('Personalized PageRank over'));
+
+// ── 8. The turn narrates what actually happens ───────────────────────────────
+//
+// Every string here described the pipeline that came before this one: a
+// hybrid retrieval ran before the model spoke, so the strip opened with
+// "Searching the graph…" and switched to "Writing the answer…" once the pack
+// landed. With the model driving, the first is said on a turn that has not
+// searched and the second while it is still deciding what to read. A caption
+// that describes the wrong pipeline is worse than none — it is the reason a
+// reader thinks Answer is Find with a paragraph on top.
+
+console.log('narrating the loop');
+
+const toolsMod = path.join(tmp, 'tools.mjs');
+fs.writeFileSync(toolsMod, `
+    function stubNode(tag) {
+        return {
+            tagName: tag, className: '', textContent: '', innerHTML: '', open: false,
+            children: [], dataset: {},
+            appendChild(k) { this.children.push(k); return k; },
+            addEventListener() {},
+            querySelectorAll() { return rows; },
+        };
+    }
+    let rows = [];
+    const state = {};
+    const document = { createElement: stubNode };
+    ${lift(chatSrc, 'groupToolRows')}
+    export function group(n) {
+        rows = Array.from({ length: n }, () => stubNode('details'));
+        const el = stubNode('div');
+        groupToolRows(el);
+        return el;
+    }
+`);
+const T = await import(toolsMod);
+
+const said = (el) => [el, ...el.children.flatMap(c => [c, ...c.children])]
+    .map(x => x.textContent).join('\n');
+
+must('one query reads as one query', said(T.group(1)).includes('queried the graph once'));
+must('several queries are counted', said(T.group(3)).includes('queried the graph 3 times'));
+must('the section says the model did the querying',
+    said(T.group(2)).includes('The model queried the graph'));
+must('it offers the evidence rather than naming a mechanism',
+    said(T.group(2)).includes('what it asked and got back')
+    && !said(T.group(2)).includes('inspect parameters'));
+must('a turn that needed nothing says why, not just that',
+    said(T.group(0)).includes('it already had enough'));
+
+// The retired captions, which are now lies rather than merely stale.
+for (const dead of ['Searching the graph…', 'Writing the answer…', 'Retrieving context…']) {
+    must(`"${dead}" is gone from the turn`, !chatSrc.includes("'" + dead + "'"));
+}
+must('the strip opens by saying it is deciding',
+    chatSrc.includes('Working out what to look up…'));
+must('a tool call names the graph it is querying',
+    chatSrc.includes('Querying the graph · '));
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0
-    ? 'the answer renders markdown and reports its cost as specified'
+    ? 'the answer renders markdown, reports its cost, explains its settings and narrates its loop'
     : `${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

@@ -900,8 +900,12 @@
                         <button class="ask-mode" data-mode="find" role="tab" type="button"
                             title="Hybrid retrieval: dense vectors and keywords fused, then a graph walk out from the seeds.">
                             Find</button>
+                        <!-- The one mode where the model drives. Saying so is
+                             not marketing: a reader who thinks this is Find
+                             plus a paragraph has no reason to look at the tool
+                             calls, which are the whole difference. -->
                         <button class="ask-mode" data-mode="answer" role="tab" type="button"
-                            title="A written answer, footnoted with the nodes it used (⌘⏎ / Ctrl+⏎).">
+                            title="Agentic graph RAG: the model searches the graph itself — hybrid search, call sites, file outlines, exact source, shortest paths — as many rounds as it needs, then answers footnoted with every node it used (⌘⏎ / Ctrl+⏎).">
                             Answer</button>
                         <button class="ask-mode" data-mode="tour" role="tab" type="button"
                             title="Fly the camera through the answer, stop by stop, narrated.">
@@ -967,10 +971,13 @@
                             <input id="chat-max-tokens" type="number" min="1" max="655360"
                                 placeholder="32768">
                         </div>
-                        <!-- What the model is actually given: retrieval method,
-                             system prompt, and the tools it may call. -->
+                        <!-- What the model is actually given: how it decides
+                             what to retrieve, the system prompt, and the tools
+                             it may call. "Retrieval" led this list while a
+                             hybrid pass ran before the model spoke; it no
+                             longer does, and the summary said otherwise. -->
                         <details class="chat-setup" id="chat-setup">
-                            <summary>How this answers · retrieval, prompt, tools</summary>
+                            <summary>How this answers · what it looks up, and what it was told</summary>
                             <div class="chat-setup-body" id="chat-setup-body">Loading…</div>
                         </details>
                     </div>
@@ -1037,19 +1044,23 @@
                     <div class="ask-caps" id="ask-caps">
                         <div class="cap-banner warn" id="sem-cap-note" hidden></div>
                         <div class="cap-banner warn" id="chat-no-embeddings-msg" hidden>
-                            <strong>Retrieval needs embeddings.</strong>
+                            <strong>Search needs embeddings.</strong>
                             This project's graph is loaded but no vectors have been
-                            written, so Find, Answer and Tour have nothing to retrieve
-                            from. Run ingest now — it picks up the embedder from your
-                            saved settings, and works in the background. Names still works.
+                            written, so Find and Tour have nothing to search. Answer still
+                            runs — the model falls back to the graph tools it can reach
+                            without vectors — but it cannot search by meaning. Run ingest
+                            now: it picks up the embedder from your saved settings and
+                            works in the background. Names still works.
                             <button class="cap-cta" type="button" id="chat-ingest-btn">Ingest now</button>
                             <div class="cap-ingest-status" id="chat-ingest-status"></div>
                         </div>
                         <div class="cap-banner warn" id="chat-disabled-msg" hidden>
                             <strong>Answers need a language model.</strong>
-                            Point UltraGraph at any OpenAI-compatible endpoint — a local one
-                            (Ollama, LM Studio, llama.cpp) or a hosted API — and Answer turns on
-                            straight away. Nothing else here needs it.
+                            Answer is agentic: the model drives the graph itself, searching and
+                            reading until it can answer, and cites every node it touched. Point
+                            UltraGraph at any OpenAI-compatible endpoint — a local one (Ollama,
+                            LM Studio, llama.cpp) or a hosted API — and it turns on straight
+                            away. Nothing else here needs it.
                             <button class="cap-cta" type="button" data-open-settings>Set up a model</button>
                         </div>
                         <!-- Tours still run without a model; only the narration needs one. -->

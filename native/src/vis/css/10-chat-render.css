@@ -102,7 +102,7 @@
 
         /* ─── Chat: the setup inspector ─────────────────────── */
 
-        .chat-setup { margin-bottom: 10px; }
+        .chat-setup { margin-bottom: 10px; margin-top: 10px; }
 
         .chat-setup > summary {
             font-size: 10px;
@@ -163,6 +163,16 @@
             border-radius: 999px;
             background: var(--bg-deep);
         }
+
+        /* A chip that explains itself says so: without the cue nobody hovers,
+           and the tooltip is where the "which way is it wrong to move this"
+           lives. `help` rather than `pointer` — hovering is all it does. */
+        .setup-facts span.has-why {
+            cursor: help;
+            border-bottom: 1px dotted var(--border);
+        }
+
+        .setup-facts span.has-why:hover { background: var(--bg-hover); }
 
         .setup-facts b {
             color: var(--text-dim);
@@ -347,6 +357,57 @@
 
         details.chat-cost > summary:hover { color: var(--text-muted); }
 
+        /* Where the bill went. An emphasis chart: the accent is the evidence,
+           everything else is de-emphasised grey. The three values passed the
+           skill's CVD (ΔE 15.4) and normal-vision (16.8) checks against this
+           panel's surface; the faintest sits under 3:1, which the itemised
+           rows below discharge by labelling every segment in text. */
+        .chat-cost {
+            --seg-ev: var(--accent);
+            --seg-fx: #7c8b9c;
+            --seg-rest: #4d5a69;
+            margin-top: 24px;
+        }
+
+        .chat-cost .cost-bar {
+            display: flex;
+            gap: 2px;              /* surface gap between fills */
+            height: 8px;
+            margin: 7px 0 6px 10px;
+            border-radius: 4px;    /* 4px rounded data-ends */
+            overflow: hidden;
+        }
+
+        .chat-cost .cost-bar .seg { flex-basis: 0; min-width: 2px; }
+        .chat-cost .seg.ev { background: var(--seg-ev); }
+        .chat-cost .seg.fx { background: var(--seg-fx); }
+        .chat-cost .seg.rest { background: var(--seg-rest); }
+
+        .chat-cost .cost-key {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 12px;
+            font-size: 9.5px;
+            color: var(--text-dim);
+            padding: 0 0 4px 10px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Identity is never colour alone: the dot sits beside its name, here
+           and again on the row it belongs to. */
+        .chat-cost .dot {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            border-radius: 2px;
+            margin-right: 5px;
+            vertical-align: baseline;
+        }
+
+        .chat-cost .dot.ev { background: var(--seg-ev); }
+        .chat-cost .dot.fx { background: var(--seg-fx); }
+        .chat-cost .dot.rest { background: var(--seg-rest); }
+
         .chat-cost .cost-row {
             display: flex;
             justify-content: space-between;
@@ -370,6 +431,13 @@
         .chat-cost .cost-row.sep:not(.baseline) { color: var(--text); }
 
         .chat-cost .cost-row.baseline { color: var(--text-dim); }
+
+        /* A derived total, not another item — it multiplies the two rows
+           above it rather than adding to them. */
+        .chat-cost .cost-row.subtle {
+            color: var(--text-dim);
+            font-size: 10px;
+        }
 
         .chat-cost .cost-note {
             font-size: 9.5px;

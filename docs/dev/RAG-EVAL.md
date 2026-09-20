@@ -81,6 +81,7 @@ k=8, hops=2, PPR, snippets on.
 | 6 | … + tool nodes citable | 8/12 | 10/12 | 46 | 6/12 | 300 s |
 | 7 | … + cap 8, concurrent calls in a round | 7/12 | 11/12 | 40 | 2/12 | 234 s |
 | 8 | **Repeat of 7, nothing changed** | **9/12** | **9/12** | 52 | 3/12 | **298 s** |
+| 9 | No pre-retrieval — the model searches for itself | 8/12 | 10/12 | 28 | 0/12 | 290 s |
 
 **Cited** = an expected node is in the citation list. **Named** = the answer
 text names an expected symbol.
@@ -112,6 +113,35 @@ What does **not** survive it, and must not be claimed:
   single round directly would.
 - The monotone `named` rise 8→9→10→11 across runs 4–7 reads as a trend and
   then run 8 returns 9. One question per step is one question of noise.
+
+#### Run 9 — removing the pre-pass
+
+`ChatRagOptions::seed` now defaults off whenever a toolbox is attached: a
+deliberating model calls `search` itself, in the codebase's vocabulary rather
+than the user's, so the pre-pass was arriving as a second and worse-phrased
+copy of the same neighbourhood. One observed turn before the change: 8 seed
+items the model did not use, 15 from its own search, 19 sources listed.
+
+**Cited recall landed on 8/12 — exactly the mean of runs 5–8.** Read against
+run 8's spread that is *no measurable change*, which is the claim: removing it
+cost nothing. It is not evidence that removing it helped.
+
+What is a fact rather than a measurement: the turn no longer pays for the pack.
+Measured by the cost instrument on one turn, `context_tokens` went 10,256 → 41
+(the preface alone).
+
+Two observations that are **not** claims — one run each, both inside the noise:
+0/12 hit the round cap (previous runs 2–6), and tool calls fell to 28, the
+lowest of any agentic run.
+
+**The change exposed a provenance hole the pack was hiding.** One row reads
+`MISS · names it · 0 cited · 5 tools` — a correct answer with no sources at
+all. `analyze` returns a table with an `id` *column*, not the `id: <value>`
+lines `cite_tool_nodes` keys on, so nothing registered. The seed pack used to
+mask this with a floor of 8 citations that had nothing to do with the answer.
+Fixing it means teaching `cite_tool_nodes` to read that column; keeping a small
+seed purely as a citation floor would be reintroducing the pre-pass under
+another name.
 
 #### The instrument needs to be bigger before it can answer anything else
 

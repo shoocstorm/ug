@@ -453,6 +453,19 @@ fn print_token_cost(outcome: &chat::ChatRagOutcome) {
         est(c.answer_chars),
         sent,
     );
+    // Fixed per turn, re-sent every round — and usually bigger than the
+    // evidence, which is the part that surprises.
+    let fixed = est(c.system_chars + c.schema_chars);
+    if fixed > 0 {
+        println!(
+            "{C_CYAN}▸{C_RESET} fixed overhead (est): system={} · tool schemas={} · \
+             {} × {} round(s)",
+            est(c.system_chars),
+            est(c.schema_chars),
+            fixed,
+            outcome.tool_rounds.max(1),
+        );
+    }
     let whole = est(c.whole_file_chars as usize);
     if c.files > 0 && sent > 0 && whole > 0 {
         println!(

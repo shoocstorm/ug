@@ -901,6 +901,15 @@ pub fn build_rag_messages(
 pub struct TurnCost {
     /// The retrieved pack put into the prompt.
     pub context_chars: usize,
+    /// The system prompt, tool suffix included.
+    ///
+    /// Fixed overhead — the same for every question — and re-sent on every
+    /// round, which is most of why the endpoint's billed total dwarfs the
+    /// evidence. Unlabelled it just looked like the estimate being wrong.
+    pub system_chars: usize,
+    /// The tool schemas as sent, when a toolbox was attached. The largest
+    /// single fixed cost of an agentic turn and the one nothing showed.
+    pub schema_chars: usize,
     /// Everything the tools returned, after clipping.
     pub tool_chars: usize,
     /// The answer itself.
@@ -935,6 +944,11 @@ pub fn cost_json(c: &TurnCost) -> serde_json::Value {
         "tool_tokens": est(c.tool_chars),
         "answer_tokens": est(c.answer_chars),
         "sent_tokens": est(sent),
+        // Fixed per turn and re-sent every round: the same for every question,
+        // and together usually larger than the evidence.
+        "system_tokens": est(c.system_chars),
+        "schema_tokens": est(c.schema_chars),
+        "fixed_tokens": est(c.system_chars + c.schema_chars),
         "whole_files": c.files,
         "whole_file_tokens": est(whole),
         // Only when there is something to compare: no files measured means
@@ -1368,10 +1382,13 @@ pub async fn run_round_calls(
 }
 
 /// Assemble what the turn spent, alongside the read-it-whole comparison.
+#[allow(clippy::too_many_arguments)]
 fn turn_cost(
     answer: &str,
     context_chars: usize,
     tool_chars: usize,
+    system_chars: usize,
+    schema_chars: usize,
     ledger: &Mutex<CitationLedger>,
     repo_root: &std::path::Path,
 ) -> TurnCost {
@@ -1381,6 +1398,8 @@ fn turn_cost(
     };
     TurnCost {
         context_chars,
+        system_chars,
+        schema_chars,
         tool_chars,
         answer_chars: answer.chars().count(),
         files,
@@ -2374,7 +2393,18 @@ pub async fn run_chat_rag(
     };
     // The retrieved pack is the second system message; its size is the part
     // of the prompt this question is responsible for.
-    let context_chars = messages.get(1).map(|m| m.content.chars().count()).unwrap_or(0);
+    //
+    // Only when there *is* one. With no seed pass that message is the
+    // "nothing retrieved yet, go and look" preface — fixed prompt text, the
+    // same for every question. Counting it as a retrieved pack reported
+    // "Retrieved pack ~41" on a turn that retrieved nothing, which reads as a
+    // tiny retrieval rather than as none.
+    let preface_chars = messages.get(1).map(|m| m.content.chars().count()).unwrap_or(0);
+    let (context_chars, preface_overhead) = if context.items.is_empty() {
+        (0, preface_chars)
+    } else {
+        (preface_chars, 0)
+    };
 
     // Deliberation is what makes a model with tools actually use them.
     //
@@ -2405,12 +2435,19 @@ pub async fn run_chat_rag(
     let mut tool_calls = 0;
     let mut tool_rounds = 0;
     let mut tool_chars = 0usize;
+    let mut schema_chars = 0usize;
+    // Read once the suffix is on it: the toolbox nearly doubles it.
+    let mut system_chars =
+        messages.first().map(|m| m.content.chars().count()).unwrap_or(0) + preface_overhead;
     let mut hit_round_cap = false;
     let mut drafted = None;
     if let Some(tb) = toolbox {
         if let Some(sys) = messages.first_mut().filter(|m| m.role == "system") {
             sys.content.push_str(TOOL_SYSTEM_SUFFIX);
         }
+        schema_chars = serde_json::to_string(&tb.schemas).map(|s| s.chars().count()).unwrap_or(0);
+        system_chars =
+            messages.first().map(|m| m.content.chars().count()).unwrap_or(0) + preface_overhead;
         // No progress feed here: nothing is watching a non-streamed turn.
         let rounds = run_tool_rounds(chat, tb, messages, |_| {}).await?;
         messages = rounds.messages;
@@ -2429,7 +2466,7 @@ pub async fn run_chat_rag(
         None => chat.complete(&messages).await?,
     };
     let completion_ms = t_cmp.elapsed().as_millis();
-    let cost = turn_cost(&answer, context_chars, tool_chars, ledger, repo_root);
+    let cost = turn_cost(&answer, context_chars, tool_chars, system_chars, schema_chars, ledger, repo_root);
 
     Ok(ChatRagOutcome {
         answer,
@@ -2506,7 +2543,18 @@ where
     };
     // The retrieved pack is the second system message; its size is the part
     // of the prompt this question is responsible for.
-    let context_chars = messages.get(1).map(|m| m.content.chars().count()).unwrap_or(0);
+    //
+    // Only when there *is* one. With no seed pass that message is the
+    // "nothing retrieved yet, go and look" preface — fixed prompt text, the
+    // same for every question. Counting it as a retrieved pack reported
+    // "Retrieved pack ~41" on a turn that retrieved nothing, which reads as a
+    // tiny retrieval rather than as none.
+    let preface_chars = messages.get(1).map(|m| m.content.chars().count()).unwrap_or(0);
+    let (context_chars, preface_overhead) = if context.items.is_empty() {
+        (0, preface_chars)
+    } else {
+        (preface_chars, 0)
+    };
 
     // Deliberation is not a luxury for a model holding tools. `fast_client`
     // sends `enable_thinking: false`, and on a Qwen3-class template that does
@@ -2531,13 +2579,20 @@ where
     let mut tool_calls = 0;
     let mut tool_rounds = 0;
     let mut tool_chars = 0usize;
+    let mut schema_chars = 0usize;
+    // Read once the suffix is on it: the toolbox nearly doubles it.
+    let mut system_chars =
+        messages.first().map(|m| m.content.chars().count()).unwrap_or(0) + preface_overhead;
     let mut hit_round_cap = false;
     let mut drafted = None;
-    if toolbox.is_some() {
+    if let Some(tb) = toolbox {
         // Tell it the tools exist, and when they're worth using.
         if let Some(sys) = messages.first_mut().filter(|m| m.role == "system") {
             sys.content.push_str(TOOL_SYSTEM_SUFFIX);
         }
+        schema_chars = serde_json::to_string(&tb.schemas).map(|s| s.chars().count()).unwrap_or(0);
+        system_chars =
+            messages.first().map(|m| m.content.chars().count()).unwrap_or(0) + preface_overhead;
     }
     if let Some(tb) = toolbox {
         let rounds = run_tool_rounds(chat, tb, messages, on_tool).await?;
@@ -2561,7 +2616,7 @@ where
             reasoning: (!d.reasoning.is_empty()).then(|| d.reasoning.clone()),
             ..Default::default()
         });
-        let cost = turn_cost(&d.content, context_chars, tool_chars, ledger, repo_root);
+        let cost = turn_cost(&d.content, context_chars, tool_chars, system_chars, schema_chars, ledger, repo_root);
         return Ok(ChatRagOutcome {
             answer: d.content,
             reasoning: d.reasoning,
@@ -2593,7 +2648,7 @@ where
         Err(e) => return Err(Box::new(e)),
     };
     let completion_ms = t_cmp.elapsed().as_millis();
-    let cost = turn_cost(&answer, context_chars, tool_chars, ledger, repo_root);
+    let cost = turn_cost(&answer, context_chars, tool_chars, system_chars, schema_chars, ledger, repo_root);
 
     Ok(ChatRagOutcome {
         answer,

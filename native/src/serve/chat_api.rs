@@ -872,14 +872,24 @@ pub(crate) async fn api_chat_config(State(state): State<ServeState>) -> Response
         "tools_enabled_by_default": true,
         "tools": tools,
         "retrieval": {
-            "summary": "Hybrid search (dense + keyword) seeds a graph ranking — not semantic-only.",
+            "summary": "The model decides what to retrieve. Nothing is searched before it does.",
             "backend": backend,
             "strategy": effective,
             "stages": [
+                // The order here is the order a turn actually runs in, and
+                // the first stage exists because its absence is what the rest
+                // used to read as: a panel that opens with "hybrid seed
+                // search" describes a pipeline that retrieves before the model
+                // speaks, and that is no longer what happens.
+                {
+                    "id": "plan",
+                    "label": "The model reads your question and decides what to look up",
+                    "detail": "No search runs first. It has the whole graph toolbox and deliberates before answering, so it searches in the vocabulary the codebase actually uses rather than yours — and skips retrieval entirely for a question that does not need it. With tools turned off there is nothing to decide, so one hybrid pass on your wording runs up front instead.",
+                },
                 {
                     "id": "hybrid",
-                    "label": "Hybrid seed search — dense + keyword, fused with RRF",
-                    "detail": "Your question is embedded and searched by vector similarity, and separately matched as keywords; the two rankings are merged by Reciprocal Rank Fusion so a hit either side can surface.",
+                    "label": "search — dense + keyword, fused with RRF",
+                    "detail": "When it calls search, your terms are embedded and searched by vector similarity, and separately matched as keywords; the two rankings are merged by Reciprocal Rank Fusion so a hit either side can surface.",
                 },
                 ranking,
                 {
@@ -887,15 +897,10 @@ pub(crate) async fn api_chat_config(State(state): State<ServeState>) -> Response
                     "label": "Char-budgeted context pack",
                     "detail": "Top nodes are hydrated with their descriptions and source snippets, then trimmed to the context budget and numbered [#1], [#2] … for citation.",
                 },
-                // Naming this stage because its absence is what the three
-                // above read as: a panel that stops at the pack describes a
-                // pipeline that answers from one pass, and that is not what
-                // runs. The model gets the toolbox and is told the pack is a
-                // starting point (see `tool_suffix`).
                 {
-                    "id": "agentic",
-                    "label": "The model searches again if the pack is thin",
-                    "detail": "That pack is where the turn starts, not where it ends. The model can rewrite your question into the vocabulary the codebase actually uses and search again, or go straight to call sites, file outlines and exact source. Anything a re-search returns continues the SAME [#1], [#2] … run, so what it found is citable and lands in the source list beside the first pass.",
+                    "id": "rounds",
+                    "label": "It keeps going until it has enough",
+                    "detail": "Each round it can call several tools at once — call sites, file outlines, exact source, shortest paths — and they run together rather than one after another. Every node any tool shows it carries its own [#N] in the same run of numbers, so what it found late is as citable as what it found first. The answer says when it stopped because it ran out of rounds rather than because it was done.",
                 },
             ],
             "defaults": {
@@ -904,6 +909,11 @@ pub(crate) async fn api_chat_config(State(state): State<ServeState>) -> Response
                 "direction": "both",
                 "include_snippets": true,
                 "max_context_chars": DEFAULT_CONTEXT_CHARS,
+                // The three that decide whether any of the above runs at all.
+                "seed": false,
+                "think": true,
+                "tool_rounds": chat::DEFAULT_TOOL_ROUNDS,
+                "tool_result_chars": chat::DEFAULT_TOOL_RESULT_CHARS,
             },
         },
     });

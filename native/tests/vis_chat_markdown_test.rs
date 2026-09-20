@@ -50,7 +50,7 @@ fn an_answer_renders_markdown_as_specified() {
     let (ok, text) = run();
     assert!(ok, "answer markdown check failed:\n{text}");
     assert!(
-        text.contains("the answer renders markdown and reports its cost as specified"),
+        text.contains("the answer renders markdown, reports its cost, explains its settings and narrates its loop"),
         "the harness did not report its checks:\n{text}"
     );
     // The constructs are independently breakable, so all of them have to have
@@ -72,5 +72,18 @@ fn an_answer_renders_markdown_as_specified() {
     assert!(
         text.contains("reporting what the turn cost"),
         "the cost-box checks must run:\n{text}"
+    );
+    // Nine bare numbers say what a setting is and nothing about what it
+    // bounds — including the two that decide whether a turn is agentic.
+    assert!(
+        text.contains("explaining the settings"),
+        "the settings-tooltip checks must run:\n{text}"
+    );
+    // The strip is the only account of the agentic loop a reader gets while
+    // it runs, and every caption in it once described the pipeline before
+    // this one — a turn that had already retrieved before the model spoke.
+    assert!(
+        text.contains("narrating the loop"),
+        "the turn-narration checks must run:\n{text}"
     );
 }
