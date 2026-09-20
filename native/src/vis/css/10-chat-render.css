@@ -226,8 +226,13 @@
         /* ─── Chat: rendered markdown ───────────────────────── */
 
         .chat-body { white-space: pre-wrap; }
-        /* Rendered markdown manages its own spacing. */
-        .chat-msg.assistant:not(.streaming) .chat-body { white-space: normal; }
+        /* Rendered markdown manages its own spacing — and it is rendered from
+           the first token now, not only once the turn ends. */
+        .chat-msg.assistant .chat-body { white-space: normal; }
+
+        /* The block still being written. No box of its own: the frozen blocks
+           above it are direct children of .chat-body and must stay that way. */
+        .chat-body .md-tail { display: contents; }
 
         .chat-body p { margin: 0 0 8px; line-height: 1.6; }
         .chat-body > :last-child { margin-bottom: 0; }
@@ -278,6 +283,43 @@
             border-left: 2px solid var(--border);
             color: var(--text-muted);
         }
+
+        /* Checklists: the marker is the box, so the bullet would be a second one. */
+        .chat-body .md-list li.md-check { list-style: none; margin-left: -14px; }
+
+        .chat-body .md-box {
+            display: inline-block;
+            width: 9px;
+            height: 9px;
+            margin-right: 6px;
+            border: 1px solid var(--border);
+            border-radius: 2px;
+            vertical-align: baseline;
+        }
+
+        .chat-body .md-box.on { background: var(--accent); border-color: var(--accent); }
+
+        /* Tables scroll on their own: the Ask column is narrow, and a wide
+           comparison must not widen the panel it sits in. */
+        .chat-body .md-tablewrap { margin: 0 0 8px; overflow-x: auto; }
+
+        .chat-body .md-table {
+            border-collapse: collapse;
+            font-size: 10.5px;
+            line-height: 1.5;
+        }
+
+        .chat-body .md-table th, .chat-body .md-table td {
+            border: 1px solid var(--border-soft);
+            padding: 3px 7px;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        .chat-body .md-table th { background: var(--bg-deep); color: var(--text); font-weight: 600; }
+        .chat-body .md-table td { color: var(--text-muted); }
+        .chat-body .md-table .md-mid { text-align: center; }
+        .chat-body .md-table .md-end { text-align: right; }
 
         .chat-body hr { border: none; border-top: 1px solid var(--border-soft); margin: 10px 0; }
         .chat-body a { color: var(--accent); }

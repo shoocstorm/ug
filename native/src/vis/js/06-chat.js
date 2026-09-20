@@ -327,14 +327,18 @@
             const text = String(src || '').replace(/\r\n?/g, '\n');
             const blocks = [];
             // Pull fenced code out first so nothing inside it gets parsed.
-            const fenced = text.replace(/```([\w+-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
-                blocks.push({ lang: lang || '', code: code.replace(/\n$/, '') });
-                return ` CODE${blocks.length - 1} `;
-            });
+            const fenced = text.replace(/(^|\n)([ \t]*)```([\w+-]*)\n([\s\S]*?)```/g,
+                (_, lead, pad, lang, code) => {
+                    // A fence under a list item is indented, and that indent
+                    // belongs to the item, not to the code.
+                    if (pad) code = code.replace(new RegExp('^' + pad, 'gm'), '');
+                    blocks.push({ lang: lang || '', code: code.replace(/\n$/, '') });
+                    return `${lead}${pad} CODE${blocks.length - 1} `;
+                });
 
             const lines = fenced.split('\n');
             let html = '';
-            let list = null;          // 'ul' | 'ol'
+            const lists = [];         // open <ul>/<ol>, outermost first
             let para = [];
             let quote = [];
 
@@ -364,23 +368,53 @@
             const flushPara = () => {
                 if (para.length) { html += `<p>${inline(para.join(' '))}</p>`; para = []; }
             };
-            const flushList = () => { if (list) { html += `</${list}>`; list = null; } };
+            const flushList = () => {
+                while (lists.length) {
+                    const l = lists.pop();
+                    html += (l.open ? '</li>' : '') + `</${l.tag}>`;
+                }
+            };
             const flushQuote = () => {
                 if (quote.length) { html += `<blockquote>${inline(quote.join(' '))}</blockquote>`; quote = []; }
             };
             const flushAll = () => { flushPara(); flushList(); flushQuote(); };
 
-            for (const raw of lines) {
-                const line = raw.replace(/\s+$/, '');
-                const codeRef = line.match(/^ CODE(\d+) $/);
+            const codeHtml = (b) => `<pre class="md-code"${b.lang ? ` data-lang="${escapeHtml(b.lang)}"` : ''}>`
+                + `<code>${escapeHtml(b.code)}</code></pre>`;
+
+            // A pipe table is the one construct that needs its neighbour: the
+            // row above the dashes is the header, so it can only be
+            // recognised one line late. Models reach for tables constantly —
+            // without this a comparison arrives as a wall of pipes.
+            const cells = (line) => {
+                let t = line.trim();
+                if (t.startsWith('|')) t = t.slice(1);
+                if (t.endsWith('|')) t = t.slice(0, -1);
+                return t.split('|').map(c => c.trim());
+            };
+            const isDelimRow = (line) => line.includes('|') && line.includes('-')
+                && cells(line).every(c => /^:?-+:?$/.test(c));
+            const alignOf = (c) => {
+                const l = c.startsWith(':'), r = c.endsWith(':');
+                return l && r ? ' class="md-mid"' : r ? ' class="md-end"' : '';
+            };
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].replace(/\s+$/, '');
+                const open = lists.length ? lists[lists.length - 1] : null;
+
+                // A fence indented under an item belongs to that item; one at
+                // the margin ends the list it follows.
+                const codeRef = line.match(/^(\s*) CODE(\d+) $/);
                 if (codeRef) {
-                    flushAll();
-                    const b = blocks[+codeRef[1]];
-                    html += `<pre class="md-code"${b.lang ? ` data-lang="${escapeHtml(b.lang)}"` : ''}>`
-                        + `<code>${escapeHtml(b.code)}</code></pre>`;
+                    if (open && open.open && codeRef[1]) flushPara();
+                    else flushAll();
+                    html += codeHtml(blocks[+codeRef[2]]);
                     continue;
                 }
-                if (!line.trim()) { flushAll(); continue; }
+                // A blank line ends a paragraph but not a list: models put one
+                // between items, and closing there restarts the numbering.
+                if (!line.trim()) { flushPara(); flushQuote(); continue; }
 
                 const heading = line.match(/^(#{1,6})\s+(.*)$/);
                 if (heading) {
@@ -391,19 +425,68 @@
                 }
                 if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) { flushAll(); html += '<hr>'; continue; }
 
+                if (line.includes('|') && i + 1 < lines.length && isDelimRow(lines[i + 1])) {
+                    flushAll();
+                    const align = cells(lines[i + 1]).map(alignOf);
+                    let t = '<div class="md-tablewrap"><table class="md-table"><thead><tr>';
+                    cells(line).forEach((c, n) => { t += `<th${align[n] || ''}>${inline(c)}</th>`; });
+                    t += '</tr></thead><tbody>';
+                    let j = i + 2;
+                    for (; j < lines.length; j++) {
+                        const row = lines[j];
+                        if (!row.trim() || !row.includes('|')) break;
+                        t += '<tr>';
+                        cells(row).forEach((c, n) => { t += `<td${align[n] || ''}>${inline(c)}</td>`; });
+                        t += '</tr>';
+                    }
+                    html += t + '</tbody></table></div>';
+                    i = j - 1;
+                    continue;
+                }
+
                 const quoted = line.match(/^>\s?(.*)$/);
                 if (quoted) { flushPara(); flushList(); quote.push(quoted[1]); continue; }
                 flushQuote();
 
-                const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
-                const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
-                if (bullet || numbered) {
+                const item = line.match(/^(\s*)(?:([-*+])|\d+[.)])\s+(.*)$/);
+                if (item) {
                     flushPara();
-                    const want = bullet ? 'ul' : 'ol';
-                    if (list !== want) { flushList(); html += `<${want} class="md-list">`; list = want; }
-                    html += `<li>${inline((bullet || numbered)[1])}</li>`;
+                    const indent = item[1].replace(/\t/g, '    ').length;
+                    const tag = item[2] ? 'ul' : 'ol';
+                    // A deeper indent opens a child list *inside* the item
+                    // that is still open — that is what makes a nested bullet
+                    // nest rather than restart the list at the top.
+                    while (lists.length && indent < lists[lists.length - 1].indent) {
+                        const l = lists.pop();
+                        html += (l.open ? '</li>' : '') + `</${l.tag}>`;
+                    }
+                    let top = lists[lists.length - 1];
+                    if (!top || indent > top.indent) {
+                        html += `<${tag} class="md-list">`;
+                        lists.push({ tag, indent, open: false });
+                    } else {
+                        if (top.open) { html += '</li>'; top.open = false; }
+                        if (top.tag !== tag) {
+                            lists.pop();
+                            html += `</${top.tag}><${tag} class="md-list">`;
+                            lists.push({ tag, indent: top.indent, open: false });
+                        }
+                    }
+                    top = lists[lists.length - 1];
+                    // `- [ ] thing` is a checklist, not a bullet whose text
+                    // happens to start with a bracket.
+                    const task = item[3].match(/^\[([ xX])\]\s+(.*)$/);
+                    html += task
+                        ? `<li class="md-check"><span class="md-box${task[1] === ' ' ? '' : ' on'}"></span>${inline(task[2])}`
+                        : `<li>${inline(item[3])}`;
+                    top.open = true;
                     continue;
                 }
+
+                // An indented line under an open item is that item's own
+                // continuation, not a paragraph that ends the list.
+                if (open && open.open && /^\s/.test(line)) { html += ' ' + inline(line.trim()); continue; }
+
                 flushList();
                 para.push(line.trim());
             }
@@ -411,11 +494,41 @@
             return html;
         }
 
+        // The last point in `text` where a block certainly ended: a blank line
+        // outside a fence, and not one sitting in the middle of a list. What
+        // comes before it will not change however the answer continues, so a
+        // streaming render can freeze it and stop re-parsing it.
+        function stableEnd(text, from) {
+            let fence = false, cut = from, pending = -1, i = from;
+            for (;;) {
+                const nl = text.indexOf('\n', i);
+                if (nl < 0) break;            // the last line is still being written
+                const line = text.slice(i, nl);
+                i = nl + 1;
+                if (/^\s*```/.test(line)) { fence = !fence; pending = -1; continue; }
+                if (fence) continue;
+                if (!line.trim()) { if (pending < 0) pending = i; continue; }
+                if (pending >= 0) {
+                    if (!/^\s*(?:[-*+]|\d+[.)])\s/.test(line)) cut = pending;
+                    pending = -1;
+                }
+            }
+            return cut;
+        }
+
         // Render markdown into `el` and wire the [#N] chips to their citations.
         function setMarkdown(el, text, citations) {
             el.innerHTML = renderMarkdown(text);
             if (!citations || !citations.length) return;
-            el.querySelectorAll('.md-cite').forEach(chip => {
+            wireCitations(el, citations);
+        }
+
+        // Chips already wired are skipped: a streaming answer re-renders its
+        // tail every frame, and the blocks above it must not collect a
+        // listener per frame.
+        function wireCitations(root, citations) {
+            root.querySelectorAll('.md-cite:not([data-wired])').forEach(chip => {
+                chip.dataset.wired = '1';
                 const c = citations.find(x => String(x.index) === chip.dataset.cite);
                 if (!c) { chip.classList.add('dead'); return; }
                 chip.title = `${c.name || c.id} · ${c.file || ''}`;
@@ -552,6 +665,13 @@
             think.hidden = true;
             think.innerHTML = '<summary>Model reasoning</summary><pre></pre>';
 
+            // Markdown renders as it arrives, not only once the turn ends:
+            // with a local model the raw text is what you read for the whole
+            // minute the answer takes, and asterisks are not a reply.
+            const tailEl = document.createElement('div');
+            tailEl.className = 'md-tail';
+            bodyEl.appendChild(tailEl);
+
             el.append(strip, think, bodyEl);
             list.appendChild(el);
             scroller.scrollTop = scroller.scrollHeight;
@@ -559,6 +679,10 @@
             const t0 = performance.now();
             let chars = 0, reasoningChars = 0, citeCount = 0, retrievalMs = null;
             const calls = new Map();   // in-flight tool rows, keyed by name+args
+            let raw = '';              // everything the model has sent
+            let frozen = 0;            // raw[0..frozen) is rendered and left alone
+            let frame = 0;             // pending render, if any
+            let liveCites = [];
             const stats = () => {
                 const secs = Math.max(0.001, (performance.now() - t0) / 1000);
                 const tokens = Math.round((chars + reasoningChars) / 4);
@@ -569,10 +693,43 @@
             };
             const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 60;
 
+            // Re-parsing the whole answer on every delta is O(answer) per
+            // token — quadratic over a long reply, and a full DOM rebuild
+            // dozens of times a second (Agents.md §1a). Blocks that are
+            // finished are rendered once and frozen; only the block still
+            // being written is re-parsed, once per frame rather than once
+            // per token. `md-tail` is `display: contents`, so the frozen
+            // blocks stay direct children of `.chat-body`.
+            const draw = () => {
+                frame = 0;
+                const stick = nearBottom();
+                const cut = stableEnd(raw, frozen);
+                if (cut > frozen) {
+                    // Wired once, off-document, then moved in: a frozen block
+                    // is never walked again, so the per-frame cost stays the
+                    // size of the tail rather than the size of the answer.
+                    const chunk = document.createElement('div');
+                    chunk.innerHTML = renderMarkdown(raw.slice(frozen, cut));
+                    if (liveCites.length) wireCitations(chunk, liveCites);
+                    while (chunk.firstChild) bodyEl.insertBefore(chunk.firstChild, tailEl);
+                    frozen = cut;
+                }
+                // The fence the model is still inside has no closing ``` yet;
+                // render it as the code block it is about to be.
+                const tail = raw.slice(frozen);
+                const unclosed = (tail.match(/^\s*```/gm) || []).length % 2;
+                tailEl.innerHTML = renderMarkdown(unclosed ? tail + '\n```' : tail);
+                if (liveCites.length) wireCitations(tailEl, liveCites);
+                if (stick) scroller.scrollTop = scroller.scrollHeight;
+            };
+            // Whatever replaces the body owns it from then on.
+            const stopDraw = () => { if (frame) { cancelAnimationFrame(frame); frame = 0; } };
+
             return {
                 phase(text) { strip.querySelector('.cp-phase').textContent = text; },
                 context(cites, ms) {
                     citeCount = cites.length;
+                    liveCites = cites || [];
                     retrievalMs = ms;
                     strip.querySelector('.cp-phase').textContent = 'Writing the answer…';
                     stats();
@@ -602,16 +759,16 @@
                 },
                 append(text) {
                     chars += text.length;
-                    const stick = nearBottom();
-                    bodyEl.textContent += text;
+                    raw += text;
+                    if (!frame) frame = requestAnimationFrame(draw);
                     stats();
-                    if (stick) scroller.scrollTop = scroller.scrollHeight;
                 },
                 finish(text, cites, done, totalMs) {
                     el.classList.remove('streaming');
+                    stopDraw();
                     strip.remove();
-                    // Streaming shows raw text (markdown can't be parsed
-                    // half-written); the finished answer gets rendered.
+                    // The streamed render guessed at a half-written tail; the
+                    // finished text is authoritative, so render it whole.
                     if (text) setMarkdown(bodyEl, text, cites);
                     else bodyEl.textContent = '(no answer)';
                     groupToolRows(el);
@@ -634,6 +791,7 @@
                 },
                 fail(msg) {
                     el.classList.remove('streaming');
+                    stopDraw();
                     el.classList.add('error');
                     strip.remove();
                     bodyEl.textContent = `Error: ${msg}`;
@@ -641,6 +799,7 @@
                 // Configured, but nothing answered at the other end.
                 unreachable(endpoint) {
                     el.classList.remove('streaming');
+                    stopDraw();
                     strip.remove();
                     bodyEl.innerHTML = '';
                     const box = document.createElement('div');

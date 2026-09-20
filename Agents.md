@@ -1936,6 +1936,25 @@ section rules, its footer) stays with that tool and is passed in —
 `Budget::new(max, reserve)`. A shared constant here is a number that is right
 for one caller and quietly wrong for the next.
 
+### 11d. The vis parts hide NUL bytes, and grep calls the file binary
+
+`renderMarkdown` in `src/vis/js/06-chat.js` parks fenced code and inline code
+in placeholders delimited by **`\x00`**, not by spaces — `\x00CODE0\x00`. The
+input is model output, so a delimiter the model can type is a delimiter the
+model can forge: with ` CODE0 ` an answer containing that literal text is
+substituted back as somebody else's code block. Rewriting the parser and
+"tidying" those to spaces looked identical in every editor and passed reading
+aloud; the harness caught it because nothing rendered as code at all.
+
+Two consequences, both of which will bite again:
+
+- **`grep` reports `js/06-chat.js` as `Binary file … matches` and prints no
+  lines.** That is the NUL, not a corrupt file. Use `grep -a`. A search that
+  silently returns nothing here is the usual first symptom.
+- **Read the bytes, not the render.** `sed`/`cat` show `\x00` as nothing;
+  `python3 -c "print(repr(line))"` shows it. Before changing any string
+  literal in a vis part, check what is actually in it.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
