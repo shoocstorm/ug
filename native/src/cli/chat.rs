@@ -222,7 +222,7 @@ pub(crate) fn run_chat(args: &[String]) {
             schemas: crate::mcp::tools::openai_tool_schemas(),
             run,
             max_rounds: max_tool_rounds,
-            max_result_chars: 6_000,
+            max_result_chars: chat::DEFAULT_TOOL_RESULT_CHARS,
         });
 
         let opts_factory = |q: &str| {

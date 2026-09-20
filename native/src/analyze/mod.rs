@@ -701,6 +701,19 @@ fn explain_failure(err: &str, gql: &str) -> String {
              than `*1..3`), list fewer edge labels, or anchor one end to a specific \
              file with `WHERE t.file = $target`.",
         );
+    } else if err.contains("IN requires a list") {
+        // Observed: a model asked for `'cli.command' IN n.boundary_kinds`,
+        // which is the right idea against the wrong shape. The multi-valued
+        // boundary properties are comma-joined strings, not lists, and the
+        // engine's own message says nothing about which property or what to
+        // use instead.
+        out.push_str(
+            "\n\nA multi-valued property here is a comma-joined STRING, not a list \
+— `boundary_kinds` and `boundary_protocols` both are. Use `CONTAINS` against it rather than `IN`: \
+`WHERE n.boundary_kinds CONTAINS 'cli.command'`. (`IN` is for a literal list on the right: \
+`WHERE n.file IN ['a.rs', 'b.rs']`.)\n\nFor boundaries specifically you do not need GQL at all — \
+`analyze boundaries --arg kind=cli.command --arg direction=inbound` answers it directly.",
+        );
     } else if err.contains("parse error") {
         out.push_str(&format!(
             "\n\nThe query that failed:\n{}\n\n\
@@ -749,6 +762,37 @@ fn unknown_preset(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The failure a model actually hits, and what it must be told.
+    ///
+    /// `'cli.command' IN n.boundary_kinds` is the right idea against the wrong
+    /// shape: the multi-valued boundary properties are comma-joined strings.
+    /// The engine says only "IN requires a list right-hand operand", which
+    /// names neither the property nor the fix.
+    #[test]
+    fn an_in_against_a_joined_string_is_explained() {
+        let out = explain_failure(
+            "backend error: overgraph: invalid operation: graph row IN requires a list right-hand operand",
+            "MATCH (n) WHERE 'cli.command' IN n.boundary_kinds RETURN n",
+        );
+        assert!(out.contains("CONTAINS"), "{out}");
+        assert!(out.contains("boundary_kinds"), "{out}");
+        // …and the answer that needs no GQL at all.
+        assert!(out.contains("analyze boundaries --arg kind="), "{out}");
+    }
+
+    #[test]
+    fn the_boundaries_preset_can_be_filtered() {
+        let p = presets::find("boundaries").expect("boundaries exists");
+        let names: Vec<&str> = p.params.iter().map(|q| q.name).collect();
+        assert_eq!(names, vec!["kind", "direction"]);
+        // Both optional: `analyze boundaries` on its own must keep working.
+        assert!(p.params.iter().all(|q| q.default.is_some()), "filters must default to everything");
+        // Substring, not equality — a symbol can carry several kinds, and `=`
+        // silently drops every one that does.
+        assert!(p.gql.contains("boundary_kinds CONTAINS $kind"), "{}", p.gql);
+        assert!(p.gql.contains("$direction = ''"), "an unset direction must match both: {}", p.gql);
+    }
+
     use super::*;
 
     fn params(preset: &str) -> AnalyzeParams {

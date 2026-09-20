@@ -323,7 +323,7 @@ fn raw_tools() -> Value {
                     "k": { "type": "integer", "minimum": 1, "maximum": 50, "description": "How many context items to return (default 8). Bump to 15-20 when surveying a subsystem; keep 5-8 when answering a focused question." },
                     "edgeTypes": { "type": "array", "items": { "type": "string" }, "description": "Restrict the walk to these edge types (case-insensitive). Common: imports, calls, extends, implements, contains, references, instantiates, uses, overrides. Leave unset for the default mix." },
                     "direction": { "type": "string", "enum": ["outbound", "inbound", "both"], "description": "Edge direction during the walk (default 'both'). Use 'inbound' when you care about who depends on the seed; 'outbound' for what the seed depends on." },
-                    "maxChars": { "type": "integer", "minimum": 100, "maximum": 200000, "description": "Approximate character budget for assembled context (default ~16k). Lower it when you only need a sketch." },
+                    "maxChars": { "type": "integer", "minimum": 100, "maximum": 200000, "description": "Approximate character budget for assembled context (default 60000). Lower it when you only need a sketch." },
                     "whereClause": { "type": "string", "description": "Optional SQL WHERE applied during seed search. Examples: \"node_type = 'Function'\", \"file LIKE 'src/auth/%'\"." },
                     "includeSnippets": { "type": "boolean", "description": "Read a source slice for each item (default false — returns lean ids+locations; set true when you want the code inline rather than a follow-up get_code)." },
                     "expand": { "type": "boolean", "description": "Whether results may include code the query did not match directly (default true). Leave it alone for normal questions — graph expansion is why this tool answers 'how does X work' better than grep. Set false to get ONLY the nodes that matched, no neighbors and no PPR: right for disambiguation ('which node do they mean?'), candidate generation before a traverse, and filtered inventory via whereClause. Cheaper, and the results are all seeds." }
@@ -394,7 +394,7 @@ fn raw_tools() -> Value {
                 "properties": {
                     "nodeId": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Direct node id lookup — a File node id when you already have one, or any symbol id to get the file that holds it. Use instead of 'file' to skip the path lookup." },
                     "file": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 } ], "description": "Repo-relative path ('native/src/main.rs'), unique suffix ('main.rs'), File node id ('file:native/src/main.rs'), or a path glob ('src/**/*.ts'). One value gets the full report; several or a glob get outlines only." },
-                    "maxChars": { "type": "integer", "minimum": 500, "description": "Total character budget for the report (default 8000). Roles are filled in priority order — outline, importer, import, test, dependent, sibling — so lowering this drops siblings and blast radius before it drops the outline. Whatever does not fit is reported as a count, never silently cut." },
+                    "maxChars": { "type": "integer", "minimum": 500, "description": "Total character budget for the report (default 60000). Roles are filled in priority order — outline, importer, import, test, dependent, sibling — so lowering this drops siblings and blast radius before it drops the outline. Whatever does not fit is reported as a count, never silently cut." },
                     "include": { "type": "array", "items": { "type": "string", "enum": ["outline", "importer", "import", "test", "dependent", "sibling"] }, "description": "Keep only these roles. Omit for all six. ['outline'] is the plain table of contents; ['test','dependent'] is the edit-safety pair to check before changing a file." },
                     "maxFiles": { "type": "integer", "minimum": 1, "maximum": 200, "description": "How many files a single glob may report (default 20). Beyond the cap the extra paths are listed by name instead of expanded, so nothing is hidden — raise this or narrow the glob." }
                 }
@@ -414,7 +414,7 @@ fn raw_tools() -> Value {
                     "startLine": { "type": "integer", "minimum": 1, "description": "1-based first line (with file; default 1)." },
                     "endLine": { "type": "integer", "minimum": 1, "description": "1-based last line, inclusive (with file; default EOF)." },
                     "range": { "type": "string", "description": "The line window as one value, in the same dialect analyze uses for rows: \"11-35\" (closed, inclusive both ends), \"34-end\" (open), \"20\" (the first 20 lines). Use it to page through a long file — ask for the next window rather than re-reading from line 1 with a bigger endLine. startLine/endLine win if you send both." },
-                    "maxChars": { "type": "integer", "minimum": 200, "maximum": 200000, "description": "Character cap on returned code (default 20000). Output notes truncation." }
+                    "maxChars": { "type": "integer", "minimum": 200, "maximum": 200000, "description": "Character cap on returned code, applied per symbol (default 60000). Output notes truncation." }
                 }
             }
         },
@@ -433,7 +433,7 @@ fn raw_tools() -> Value {
                 "type": "object",
                 "properties": {
                     "nodeId": { "type": "string", "description": format!("The one symbol to build the pack around. {refs} It must resolve to exactly one symbol; resolve an ambiguous name with find_symbols first.", refs = NODE_REF_FORMS) },
-                    "maxChars": { "type": "integer", "minimum": 500, "description": "Total character budget for the whole pack (default 12000). Roles are filled in priority order — target, caller, test, dependency, doc — so lowering this drops docs and dependencies before it drops callers." },
+                    "maxChars": { "type": "integer", "minimum": 500, "description": "Total character budget for the whole pack (default 60000). Roles are filled in priority order — target, caller, test, dependency, doc — so lowering this drops docs and dependencies before it drops callers." },
                     "include": { "type": "array", "items": { "type": "string", "enum": ["target", "caller", "test", "dependency", "doc"] }, "description": "Keep only these roles. Omit for all five. ['caller','test'] is the edit-safety pair; ['target'] is just the source." }
                 },
                 "required": ["nodeId"]

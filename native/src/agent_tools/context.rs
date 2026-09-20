@@ -28,7 +28,7 @@ pub struct ContextParams {
 /// Deliberately well under `get_code`'s 20k: the point of this tool is to be
 /// cheaper than the five calls it replaces, and a pack that costs more than
 /// `get_code` alone would be a worse deal dressed as a better one.
-const CONTEXT_DEFAULT_MAX_CHARS: usize = 12_000;
+use super::DEFAULT_MAX_CHARS as CONTEXT_DEFAULT_MAX_CHARS;
 
 /// Ceiling on the share of the budget the target's own body may take, so one
 /// enormous function cannot crowd out every caller and test — the parts that

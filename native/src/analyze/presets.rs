@@ -114,6 +114,30 @@ pub fn all() -> &'static [Preset] {
 
 const NO_PARAMS: &[PresetParam] = &[];
 
+/// Filters for the boundary listing. Both default to "everything", so
+/// `analyze boundaries` stays a one-word call until you want to narrow it.
+///
+/// These exist because without them the only way to ask "just the CLI ones"
+/// was to list all 142 surfaces, page through them, and then hand-write the
+/// GQL anyway — observed costing seven tool calls for a question that is one.
+const BOUNDARY_FILTERS: &[PresetParam] = &[
+    PresetParam {
+        name: "kind",
+        // Substring, not equality: `boundary_kinds` is a comma-joined list
+        // because one symbol can be several things at once, and `=` silently
+        // drops every symbol that carries two.
+        description: "Only this boundary kind — e.g. 'cli.command', 'http.endpoint', 'http.client'. Matched as a substring, so a symbol carrying several kinds still matches. Run boundary_census to see which kinds this repo actually has. Default: every kind.",
+        default: Some(ParamValue::Str("")),
+        list: false,
+    },
+    PresetParam {
+        name: "direction",
+        description: "'inbound' for surfaces this system exposes (handlers, CLI commands, listeners) or 'outbound' for what it consumes (HTTP/DB clients). Default: both.",
+        default: Some(ParamValue::Str("")),
+        list: false,
+    },
+];
+
 /// No follow-up worth naming: the answer is the end of the question.
 const NO_NEXT: &[(&str, &str)] = &[];
 
@@ -594,17 +618,26 @@ pub static BUILTIN: &[Preset] = &[
               LIMIT 200",
         headline: None,
         next: &[
-            ("analyze --gql \"MATCH (n) WHERE n.boundary_kinds CONTAINS 'http.client' RETURN elementKey(n) AS symbol, n.boundary_detail AS surface\"", "every symbol of one kind — CONTAINS, not =, or a symbol carrying two kinds is dropped"),
+            ("analyze boundaries --arg kind=<kind from the rows above>", "every symbol of one kind, with its id and surface"),
             ("analyze boundaries", "the same surfaces listed one per row, with their ids"),
         ],
     },
     Preset {
         name: "boundaries",
         category: Category::Architecture,
-        description: "Every system entry and exit point — REST handlers, queue listeners, CLI commands, outbound clients.",
-        params: NO_PARAMS,
+        description: "Every system entry and exit point — REST handlers, queue listeners, CLI commands, outbound clients. Filter with kind and/or direction.",
+        params: BOUNDARY_FILTERS,
+        // An unset filter is the empty string, and both predicates are
+        // written so that the empty string matches everything: `CONTAINS ''`
+        // is true of every value, and the direction clause short-circuits on
+        // its first branch. That keeps one query for the filtered and
+        // unfiltered questions instead of four near-identical presets.
         gql: "MATCH (n) \
               WHERE n.boundary = 1 \
+                AND n.boundary_kinds CONTAINS $kind \
+                AND ($direction = '' \
+                     OR ($direction = 'inbound' AND n.boundary_in = 1) \
+                     OR ($direction = 'outbound' AND n.boundary_out = 1)) \
               RETURN elementKey(n) AS id, \
                      n.boundary_kinds AS kinds, \
                      n.boundary_detail AS surface, \
@@ -613,7 +646,8 @@ pub static BUILTIN: &[Preset] = &[
               LIMIT 200",
         headline: None,
         next: &[
-            ("analyze --gql \"MATCH (n) WHERE n.boundary_kinds CONTAINS 'http.client' RETURN elementKey(n) AS symbol, n.boundary_detail AS surface\"", "every symbol of one kind — CONTAINS, not =, or a symbol carrying two kinds is dropped"),
+            ("analyze boundaries --arg kind=http.client", "one kind only — no GQL needed"),
+            ("analyze boundaries --arg direction=inbound", "only what this system exposes"),
             ("analyze boundary_impact --arg target=<file-or-symbol>", "what a change reaches through these"),
         ],
     },

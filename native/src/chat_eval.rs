@@ -343,7 +343,7 @@ fn rag_eval_agentic_recall() {
                 schemas: crate::mcp::tools::openai_tool_schemas(),
                 run: &runner,
                 max_rounds: chat::DEFAULT_TOOL_ROUNDS,
-                max_result_chars: 6_000,
+                max_result_chars: chat::DEFAULT_TOOL_RESULT_CHARS,
             };
 
             let t = std::time::Instant::now();

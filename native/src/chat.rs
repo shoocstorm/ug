@@ -63,6 +63,22 @@ pub const DEFAULT_TOOL_ROUNDS: usize = 8;
 /// Hard ceiling on `max_tool_rounds`, whatever a request asks for.
 pub const MAX_TOOL_ROUNDS: usize = 16;
 
+/// How much of one tool's output may reach the prompt.
+///
+/// Was 6 000, which is a page and a half: an `analyze boundaries` listing 142
+/// surfaces was cut off at `(result truncated at 6000 chars)` mid-table, and a
+/// model handed half a table either answers from half a table or spends
+/// another round paging for the rest. Both are worse than the tokens.
+///
+/// **This is a per-call cap, not a per-turn one.** Nothing yet bounds the sum,
+/// so a turn that makes several large calls across several rounds can put far
+/// more than this in front of the model — 8 rounds x a few calls x 60 k chars
+/// is ~120 k tokens, which fits a 262 k-token window and does not fit a 32 k
+/// one. A whole-turn budget is the missing piece (docs/dev/RAG-EVAL.md);
+/// until it exists, lower this for a small-context model rather than assuming
+/// the cap protects you.
+pub const DEFAULT_TOOL_RESULT_CHARS: usize = ultragraph::agent_tools::DEFAULT_MAX_CHARS;
+
 
 #[derive(Clone, Debug)]
 pub struct ChatConfig {
@@ -1073,7 +1089,11 @@ pub async fn run_search_tool(
         .and_then(|v| v.as_bool())
         .unwrap_or(name != "semantic_search");
     opts.include_snippets = true;
-    opts.max_chars = 6_000;
+    // Retrieve to the same budget the result is allowed to occupy. These were
+    // both 6 000 and had to move together: raising only the clip leaves the
+    // *retrieval* trimming items the clip would have let through, and raising
+    // only the clip's ceiling changes nothing for this tool at all.
+    opts.max_chars = DEFAULT_TOOL_RESULT_CHARS;
     let ctx = storage_search_kb(store, embedder, opts)
         .await
         .map_err(|e| e.to_string())?;
@@ -1083,7 +1103,7 @@ pub async fn run_search_tool(
     // across an `await` would make this future `!Send`.
     let rendered = {
         let mut l = ledger.lock().expect("citation ledger poisoned");
-        l.render(&ctx.items, 6_000)
+        l.render(&ctx.items, DEFAULT_TOOL_RESULT_CHARS)
     };
     Ok(rendered)
 }
@@ -1921,6 +1941,18 @@ mod tests {
         assert_eq!(clip_tool_result("small", 100), "small");
         // Exactly at the limit is still untouched — the comparison is `<=`.
         assert_eq!(clip_tool_result("abcde", 5), "abcde");
+    }
+
+    #[test]
+    fn the_default_budget_fits_a_whole_boundary_listing() {
+        // The number that set this: `analyze boundaries` over ~142 surfaces
+        // was cut at 6 000 chars mid-table. A model handed half a table either
+        // answers from half a table or spends a round paging for the rest.
+        let a_full_listing = 142 * 120; // ~120 chars per row, id + kinds + file
+        assert!(
+            DEFAULT_TOOL_RESULT_CHARS > a_full_listing,
+            "a full listing is ~{a_full_listing} chars and the cap is {DEFAULT_TOOL_RESULT_CHARS}"
+        );
     }
 
     #[test]

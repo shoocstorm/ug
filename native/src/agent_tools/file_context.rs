@@ -49,7 +49,7 @@ pub struct FileContextParams {
 /// measured six-call workaround this replaces —  `file_outline` +
 /// `find_usages` + `traverse` + three `analyze` presets — came to roughly
 /// 8,200 characters, most of it `traverse` repeating the outline.
-const FILE_CONTEXT_DEFAULT_MAX_CHARS: usize = 8_000;
+use super::DEFAULT_MAX_CHARS as FILE_CONTEXT_DEFAULT_MAX_CHARS;
 
 /// Rendering overhead every report pays: the heading, the id line, the facts
 /// line, the budget line, six section rules and the trailing hint. See

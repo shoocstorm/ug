@@ -24,6 +24,20 @@ use crate::types::{BoundaryDirection, GraphData, GraphEdgeType, GraphNode, Graph
 // `Render` lives in `crate::style` beside the escape codes and the colour
 // gate it drives; re-exported here because `agent_tools::Render` is the path
 // every transport (CLI, HTTP, MCP) already imports it by.
+/// The character budget a graph tool's output gets when the caller names none.
+///
+/// One number for every tool, because the caller — an agent deciding what to
+/// read next — has no way to know that `file_context` stopped at 8 000 while
+/// `get_code` ran to 20 000, and a truncated answer is indistinguishable from
+/// a complete one unless it happens to say so. It was three different numbers
+/// and a listing got cut mid-table at the smallest of them.
+///
+/// It is a **ceiling, not a target**: these tools emit what the question
+/// needs, which is usually far less. Lower it per call with `maxChars` when
+/// a sketch will do, and lower it globally for a small-context model — the
+/// per-turn sum is still unbounded (see `chat::DEFAULT_TOOL_RESULT_CHARS`).
+pub const DEFAULT_MAX_CHARS: usize = 60_000;
+
 pub use crate::style::Render;
 
 /// Separator between sections of a batched call (one per node id / file /

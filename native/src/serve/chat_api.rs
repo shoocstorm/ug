@@ -402,7 +402,7 @@ pub(crate) async fn api_chat(
                     .max_tool_rounds
                     .unwrap_or(chat::DEFAULT_TOOL_ROUNDS)
                     .min(chat::MAX_TOOL_ROUNDS),
-        max_result_chars: 6_000,
+        max_result_chars: chat::DEFAULT_TOOL_RESULT_CHARS,
     });
 
     let outcome = chat::run_chat_rag(chat::ChatRagRequest {
@@ -554,7 +554,7 @@ pub(crate) fn api_chat_stream(
                     .max_tool_rounds
                     .unwrap_or(chat::DEFAULT_TOOL_ROUNDS)
                     .min(chat::MAX_TOOL_ROUNDS),
-                max_result_chars: 6_000,
+                max_result_chars: chat::DEFAULT_TOOL_RESULT_CHARS,
             })
         } else {
             None
@@ -1193,7 +1193,7 @@ pub(crate) fn api_tour_stream(
             schemas: crate::mcp::tools::openai_tool_schemas(),
             run: &runner,
             max_rounds: body.max_tool_rounds.unwrap_or(3).min(8),
-            max_result_chars: 4_000,
+            max_result_chars: chat::DEFAULT_TOOL_RESULT_CHARS,
         });
 
         let mut used_model: Option<String> = None;

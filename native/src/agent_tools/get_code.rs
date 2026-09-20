@@ -28,7 +28,7 @@ pub struct GetCodeParams {
     pub no_doc: bool,
 }
 
-const DEFAULT_MAX_CHARS: usize = 20_000;
+use super::DEFAULT_MAX_CHARS;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CodeSlice {
