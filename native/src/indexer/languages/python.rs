@@ -6,8 +6,7 @@ use crate::indexer::common::{
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
     base_type_name, looks_like_constant, looks_like_type, module_path, CallSink, ImportScope,
-    TypeEnv, CTOR, MEMBER_SEP,
-};
+    TypeEnv, CTOR, MEMBER_SEP, type_idents,};
 use crate::types::{
     Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
     SymbolMetrics,
@@ -51,6 +50,24 @@ impl LanguageIndexer for PythonIndexer {
         let mut symbols = Vec::new();
         visit(root, source, &walk, None, &mut symbols);
         symbols
+    }
+
+    fn extract_module_refs(
+        &self,
+        source: &[u8],
+        root: Node,
+        ctx: &FileContext,
+    ) -> crate::types::ModuleRefs {
+        let scope = ImportScope::new("python", module_path(ctx.path, "python"), ctx.imports);
+        let walk = Ctx {
+            fields: collect_class_fields(root, source),
+            scope: &scope,
+        };
+        let mut env = TypeEnv::new();
+        let mut sink = CallSink::new();
+        collect_module_level_calls(&root, source, &walk, &mut env, &mut sink);
+        let (calls, _refs, _uses, value_refs) = sink.into_parts();
+        crate::types::ModuleRefs { calls, value_refs }
     }
 }
 
@@ -338,6 +355,7 @@ fn extract_symbol_from_node(
             let return_type = extract_return_type(node, source);
             let (calls, call_refs, uses, value_refs) =
                 extract_calls(node, source, ctx, owner, &params);
+            let type_refs = signature_type_refs(&params, return_type.as_deref(), ctx);
             let docstring = extract_docstring(node, source);
             let metrics = SymbolMetrics {
                 // Inclusive of both the first and last line, matching the
@@ -372,6 +390,7 @@ fn extract_symbol_from_node(
                 call_refs,
                 uses,
                 value_refs,
+                type_refs,
                 qualified_name,
                 owner: owner.map(|o| o.fqn.clone()),
                 metrics: Some(metrics),
@@ -389,6 +408,7 @@ fn extract_symbol_from_node(
                 .iter()
                 .filter_map(|b| ctx.scope.resolve_type_ref(b))
                 .collect();
+            let type_refs = class_body_type_refs(node, source, ctx);
             out.push(Symbol {
                 id: format!("class:{}:{}", start, name),
                 qualified_name: Some(ctx.scope.qualify(&name)),
@@ -404,6 +424,7 @@ fn extract_symbol_from_node(
                 extends,
                 implements: Vec::new(),
                 calls: Vec::new(),
+                type_refs,
                 metrics: None,
                 annotations: extract_decorators(node, source),
                 ..Default::default()
@@ -456,6 +477,100 @@ fn extract_symbol_from_node(
 // ---------------------------------------------------------------------------
 // Call sites
 // ---------------------------------------------------------------------------
+
+/// Resolve every type named in an annotation against this file's imports.
+///
+/// Python's annotations are the only place a type dependency is written
+/// down — there is no `new Foo()` for a dataclass passed in — and
+/// `list[Order]`, `Optional[Order]` and `dict[str, Order]` all name `Order`
+/// inside the brackets, which `base_type_name` drops.
+fn record_type_refs(written: &str, ctx: &Ctx, out: &mut Vec<String>) {
+    for tok in type_idents(written, ".") {
+        let tail = tok.rsplit('.').next().unwrap_or(tok);
+        let mut candidates = Vec::new();
+        candidates.extend(ctx.scope.resolve_path(tok));
+        candidates.extend(ctx.scope.glob_candidates(tail));
+        for candidate in candidates {
+            if !out.contains(&candidate) {
+                out.push(candidate);
+            }
+        }
+    }
+}
+
+/// Types named by a `def`'s parameter annotations and its return annotation.
+fn signature_type_refs(params: &[Param], return_type: Option<&str>, ctx: &Ctx) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in params {
+        if let Some(t) = &p.param_type {
+            record_type_refs(t, ctx, &mut out);
+        }
+    }
+    if let Some(r) = return_type {
+        record_type_refs(r, ctx, &mut out);
+    }
+    out
+}
+
+/// Types named by a class body's annotated attributes — the dataclass /
+/// pydantic shape, where the whole model is field annotations and nothing
+/// else in the file names those types.
+fn class_body_type_refs(node: &Node, source: &[u8], ctx: &Ctx) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(body) = node.child_by_field_name("body") else {
+        return out;
+    };
+    let mut cursor = body.walk();
+    for stmt in body.children(&mut cursor) {
+        let mut inner = stmt.walk();
+        for node in std::iter::once(stmt).chain(stmt.children(&mut inner)) {
+            if node.kind() != "assignment" {
+                continue;
+            }
+            if let Some(t) = get_node_text(node.child_by_field_name("type"), source) {
+                record_type_refs(&t, ctx, &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// Calls and value references written at module scope — the file's own
+/// code, outside any `def` or `class` it declares.
+///
+/// Python runs its module body on import, and a great deal of real work
+/// lives there: a script's entry call, a registry being populated, a
+/// framework app being wired. None of it belongs to a symbol, so every one
+/// of those call sites was dropped.
+fn collect_module_level_calls(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    env: &mut TypeEnv,
+    sink: &mut CallSink,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        // A `def` or `class` owns its body; descending would re-attribute
+        // every call it makes to the file as well.
+        if matches!(child.kind(), "function_definition" | "class_definition") {
+            continue;
+        }
+        record_constant_use(&child, source, ctx, &mut sink.uses);
+        match child.kind() {
+            "assignment" => record_local(&child, source, ctx, env),
+            "call" => {
+                if let Some(r) = call_ref_for(&child, source, ctx, None, env) {
+                    push_call(&mut sink.calls, &r.name);
+                    sink.refs.push(r);
+                }
+                record_value_refs(&child, source, ctx, env, &mut sink.value_refs);
+            }
+            _ => {}
+        }
+        collect_module_level_calls(&child, source, ctx, env, sink);
+    }
+}
 
 /// Call sites inside one function body, with whatever receiver type this file
 /// can supply. See the Rust indexer's equivalent for why the display list now

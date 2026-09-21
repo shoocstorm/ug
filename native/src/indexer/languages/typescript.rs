@@ -9,8 +9,7 @@ use crate::indexer::common::{
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
     base_type_name, looks_like_constant, looks_like_type, module_path, CallSink, ImportScope,
-    TypeEnv, CTOR, MEMBER_SEP,
-};
+    TypeEnv, CTOR, MEMBER_SEP, type_idents,};
 use crate::types::{
     Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
     SymbolMetrics,
@@ -476,6 +475,7 @@ fn extract_symbol_from_node(
             let return_type = extract_return_type(node, source);
             let (calls, call_refs, uses, value_refs) =
                 extract_calls(node, source, ctx, owner, &params);
+            let type_refs = signature_type_refs(&params, return_type.as_deref(), ctx);
             let extends = extract_extends(node, source);
             let implements = extract_implements(node, source);
             let docstring = extract_docstring(node, source);
@@ -513,6 +513,7 @@ fn extract_symbol_from_node(
                 uses,
                 value_refs,
                 qualified_name,
+                type_refs,
                 owner: owner.map(|o| o.fqn.clone()),
                 metrics: Some(metrics),
                 annotations,
@@ -528,6 +529,7 @@ fn extract_symbol_from_node(
             // written `Store` means whichever `Store` this file imported.
             let extends = qualify_heritage(extract_extends(node, source), ctx);
             let implements = qualify_heritage(extract_implements(node, source), ctx);
+            let type_refs = body_type_refs(node, source, ctx);
             out.push(Symbol {
                 id: format!("class:{}:{}", start, name),
                 qualified_name: Some(ctx.scope.qualify(&name)),
@@ -543,6 +545,7 @@ fn extract_symbol_from_node(
                 extends,
                 implements,
                 calls: Vec::new(),
+                type_refs,
                 metrics: None,
                 annotations,
                 ..Default::default()
@@ -553,6 +556,7 @@ fn extract_symbol_from_node(
                 return;
             };
             let extends = qualify_heritage(extract_extends(node, source), ctx);
+            let type_refs = body_type_refs(node, source, ctx);
             out.push(Symbol {
                 id: format!("interface:{}:{}", start, name),
                 qualified_name: Some(ctx.scope.qualify(&name)),
@@ -568,6 +572,7 @@ fn extract_symbol_from_node(
                 extends,
                 implements: Vec::new(),
                 calls: Vec::new(),
+                type_refs,
                 metrics: None,
                 ..Default::default()
             });
@@ -604,6 +609,10 @@ fn extract_symbol_from_node(
                 // as a `function` declaration's.
                 let (calls, call_refs, uses, value_refs) =
                     extract_calls(&decl, source, ctx, owner, &[]);
+                let mut type_refs = Vec::new();
+                if let Some(t) = get_node_text(decl.child_by_field_name("type"), source) {
+                    record_type_refs(&t, ctx, &mut type_refs);
+                }
                 out.push(Symbol {
                     id: format!("{}:{}:{}", if is_fn { "fn" } else { "var" }, start, name),
                     qualified_name: Some(ctx.scope.qualify(&name)),
@@ -622,6 +631,7 @@ fn extract_symbol_from_node(
                     call_refs,
                     uses,
                     value_refs,
+                    type_refs,
                     metrics: None,
                     ..Default::default()
                 });
@@ -846,6 +856,82 @@ fn record_pair_value_ref(
             value_refs.push(fqn);
         }
     }
+}
+
+/// Resolve every type named in `written` against this file's imports.
+///
+/// `base_type_name` stops at the first `<`, which in a typed language
+/// throws away most of the answer: `Map<string, Order>` depends on `Order`,
+/// `Order[]` and `Order | null` both name `Order`, and a callback type
+/// `(o: Order) => Reply` names two. TypeScript's dependency graph is mostly
+/// these, and none of them was being read — a `.ts` file's interfaces had
+/// no inbound edge from anything that used them.
+fn record_type_refs(written: &str, ctx: &Ctx, out: &mut Vec<String>) {
+    for tok in type_idents(written, ".") {
+        let tail = tok.rsplit('.').next().unwrap_or(tok);
+        let mut candidates = Vec::new();
+        candidates.extend(ctx.scope.resolve_path(tok));
+        candidates.extend(ctx.scope.glob_candidates(tail));
+        for candidate in candidates {
+            if !out.contains(&candidate) {
+                out.push(candidate);
+            }
+        }
+    }
+}
+
+/// Types named by a signature's parameters and return type.
+fn signature_type_refs(params: &[Param], return_type: Option<&str>, ctx: &Ctx) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in params {
+        if let Some(t) = &p.param_type {
+            record_type_refs(t, ctx, &mut out);
+        }
+    }
+    if let Some(r) = return_type {
+        record_type_refs(r, ctx, &mut out);
+    }
+    out
+}
+
+/// Types named by the members of a class or interface body.
+///
+/// Walks this body only. The visitor recurses to find nested declarations,
+/// and descending here would attribute an inner class's fields to the outer
+/// one.
+fn body_type_refs(node: &Node, source: &[u8], ctx: &Ctx) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(body) = node.child_by_field_name("body") else {
+        return out;
+    };
+    let mut cursor = body.walk();
+    for member in body.children(&mut cursor) {
+        match member.kind() {
+            // `head: Order | null = null` in a class, `id: string` in an
+            // interface, and the index/call signatures beside them.
+            "public_field_definition"
+            | "property_signature"
+            | "index_signature"
+            | "property_declaration" => {
+                if let Some(t) = get_node_text(member.child_by_field_name("type"), source) {
+                    record_type_refs(&t, ctx, &mut out);
+                }
+            }
+            // `handle(o: Order): Reply` declared on an interface has no
+            // body, so it is never visited as a symbol of its own.
+            "method_signature" => {
+                let params = extract_params(&member, source);
+                let ret = extract_return_type(&member, source);
+                for r in signature_type_refs(&params, ret.as_deref(), ctx) {
+                    if !out.contains(&r) {
+                        out.push(r);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn collect_calls(

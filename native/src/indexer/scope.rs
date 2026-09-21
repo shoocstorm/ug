@@ -510,33 +510,35 @@ pub fn base_type_name(written: &str) -> &str {
 /// when its **last segment** looks like a type, which drops lifetimes,
 /// primitives, `dyn`/`impl`/`mut`, and the lowercase module prefixes that
 /// are already carried inside the paths they qualify.
-pub fn type_idents(written: &str) -> Vec<&str> {
+pub fn type_idents<'a>(written: &'a str, sep: &str) -> Vec<&'a str> {
     let mut out = Vec::new();
-    let is_tok = |c: char| c.is_alphanumeric() || c == '_' || c == ':';
+    let sep_char = sep.chars().next().unwrap_or(':');
+    let is_tok = |c: char| c.is_alphanumeric() || c == '_' || c == '$' || c == sep_char;
     let mut run: Option<usize> = None;
     for (i, c) in written.char_indices() {
         match (is_tok(c), run) {
             (true, None) => run = Some(i),
             (false, Some(start)) => {
-                keep_type_token(&written[start..i], &mut out);
+                keep_type_token(&written[start..i], sep, &mut out);
                 run = None;
             }
             _ => {}
         }
     }
     if let Some(start) = run {
-        keep_type_token(&written[start..], &mut out);
+        keep_type_token(&written[start..], sep, &mut out);
     }
     out
 }
 
 /// Keep one token from [`type_idents`] if its last path segment names a type.
-fn keep_type_token<'a>(tok: &'a str, out: &mut Vec<&'a str>) {
-    let tok = tok.trim_matches(':');
+fn keep_type_token<'a>(tok: &'a str, sep: &str, out: &mut Vec<&'a str>) {
+    let sep_char = sep.chars().next().unwrap_or(':');
+    let tok = tok.trim_matches(sep_char);
     if tok.is_empty() {
         return;
     }
-    let last = tok.rsplit("::").next().unwrap_or(tok);
+    let last = tok.rsplit(sep).next().unwrap_or(tok);
     if !looks_like_type(last) {
         return;
     }

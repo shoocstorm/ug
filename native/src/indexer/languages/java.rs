@@ -53,7 +53,7 @@ use crate::indexer::common::{
     calculate_nesting, extract_params_from_signature, first_string_arg, get_node_text,
     truncate_chars, imports_in_stable_order};
 use crate::indexer::languages::{FileContext, LanguageIndexer};
-use crate::indexer::scope::CTOR;
+use crate::indexer::scope::{looks_like_constant, type_idents, CTOR, MEMBER_SEP};
 use crate::types::{
     Annotation, CallRef, ExportInfo, ImportInfo, ImportedItem, Param, Signature, Symbol,
     SymbolMetrics,
@@ -488,7 +488,7 @@ fn visit_type_decl(
     // Record components declare state but live on the declaration rather
     // than in the body, so they are emitted here rather than by the walk.
     if kind == "record_declaration" {
-        emit_record_components(&node, source, stack.last(), out);
+        emit_record_components(&node, source, ctx, stack.last(), out);
     }
     stack.pop();
 }
@@ -551,6 +551,7 @@ fn collect_fields(node: &Node, source: &[u8], ctx: &FileCtx) -> HashMap<String, 
 fn emit_record_components(
     node: &Node,
     source: &[u8],
+    ctx: &FileCtx,
     owner: Option<&TypeCtx>,
     out: &mut Vec<Symbol>,
 ) {
@@ -566,6 +567,12 @@ fn emit_record_components(
         let Some(name) = get_node_text(child.child_by_field_name("name"), source) else {
             continue;
         };
+        // A record component is a field written in the header, so it
+        // carries the same dependency on its type.
+        let mut type_refs = Vec::new();
+        if let Some(t) = get_node_text(child.child_by_field_name("type"), source) {
+            record_type_refs(&t, ctx, &mut type_refs);
+        }
         push_variable(
             &name,
             start,
@@ -573,6 +580,7 @@ fn emit_record_components(
             None,
             extract_annotations(&child, source),
             owner,
+            type_refs,
             out,
         );
     }
@@ -612,6 +620,18 @@ fn extract_member(
             let return_type = get_node_text(node.child_by_field_name("type"), source);
             let annotations = extract_annotations(node, source);
             let (calls, call_refs) = extract_calls(node, source, ctx, owner, &params);
+            let mut type_refs = signature_type_refs(&params, return_type.as_deref(), ctx);
+            let mut uses = Vec::new();
+            let mut value_refs = Vec::new();
+            collect_body_refs(
+                node,
+                source,
+                ctx,
+                owner,
+                &mut uses,
+                &mut type_refs,
+                &mut value_refs,
+            );
 
             let metrics = SymbolMetrics {
                 // Inclusive of both the first and last line, matching the
@@ -655,6 +675,9 @@ fn extract_member(
                 route: http_route(owner, &annotations),
                 annotations,
                 call_refs,
+                uses,
+                value_refs,
+                type_refs,
                 ..Default::default()
             });
         }
@@ -664,6 +687,14 @@ fn extract_member(
             // becomes its own symbol.
             let annotations = extract_annotations(node, source);
             let docstring = extract_javadoc(node, source);
+            // A field's declared type is its class's dependency on that
+            // type, and in Java that is most of the dependency graph: a
+            // service holds its repository, its cache and its DTOs as
+            // fields and names them nowhere else.
+            let mut type_refs = Vec::new();
+            if let Some(t) = get_node_text(node.child_by_field_name("type"), source) {
+                record_type_refs(&t, ctx, &mut type_refs);
+            }
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() != "variable_declarator" {
@@ -679,6 +710,7 @@ fn extract_member(
                     docstring.clone(),
                     annotations.clone(),
                     owner,
+                    type_refs.clone(),
                     out,
                 );
             }
@@ -687,6 +719,7 @@ fn extract_member(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_variable(
     simple: &str,
     start: u32,
@@ -694,6 +727,7 @@ fn push_variable(
     docstring: Option<String>,
     annotations: Vec<Annotation>,
     owner: Option<&TypeCtx>,
+    type_refs: Vec<String>,
     out: &mut Vec<Symbol>,
 ) {
     let name = qualified_display(owner, simple);
@@ -708,6 +742,7 @@ fn push_variable(
         qualified_name: owner.map(|o| format!("{}#{}", o.fqn, simple)),
         owner: owner.map(|o| o.fqn.clone()),
         annotations,
+        type_refs,
         ..Default::default()
     });
 }
@@ -740,6 +775,133 @@ fn resolve_all(names: &[String], ctx: &FileCtx) -> Vec<String> {
 /// names, used for display and for the language-agnostic fallback in the
 /// graph builder. The `Vec<CallRef>` is the new one: one entry per call
 /// site, tagged with the type it dispatches on wherever that was knowable.
+/// Every type named inside a written Java type, resolved through this
+/// file's imports.
+///
+/// `base_type_name` answers "what is this type" and stops at the first `<`,
+/// which loses exactly the name that matters: `List<Order>` is a dependency
+/// on `Order`, and `Map<String, Order>` on `Order` again. Java's dependency
+/// graph is mostly type references — fields, parameters, returns — so
+/// reading only outer names left a service class with no edge to any of the
+/// types it is written in terms of.
+fn record_type_refs(raw: &str, ctx: &FileCtx, out: &mut Vec<String>) {
+    for tok in type_idents(raw, ".") {
+        if PRIMITIVES.contains(&tok) {
+            continue;
+        }
+        if let Some(fqn) = ctx.resolve_type(tok) {
+            if !out.contains(&fqn) {
+                out.push(fqn);
+            }
+        }
+    }
+}
+
+/// Types named by a method's parameters and return type.
+fn signature_type_refs(params: &[Param], return_type: Option<&str>, ctx: &FileCtx) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in params {
+        if let Some(t) = &p.param_type {
+            record_type_refs(t, ctx, &mut out);
+        }
+    }
+    if let Some(r) = return_type {
+        record_type_refs(r, ctx, &mut out);
+    }
+    out
+}
+
+/// A `static final` constant read through its declaring type, and the types
+/// named in a method body.
+///
+/// Java keeps its thresholds and magic strings in `static final` fields, and
+/// reads them as `Limits.MAX_ROWS` — a `field_access`, not a call, so
+/// nothing in the call walk ever saw one. `SCREAMING_SNAKE_CASE` keys the
+/// same convention the other three indexers use.
+#[allow(clippy::too_many_arguments)]
+fn collect_body_refs(
+    node: &Node,
+    source: &[u8],
+    ctx: &FileCtx,
+    owner: Option<&TypeCtx>,
+    uses: &mut Vec<String>,
+    type_refs: &mut Vec<String>,
+    value_refs: &mut Vec<String>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            // `Limits.MAX_ROWS`
+            "field_access" => {
+                if let (Some(obj), Some(field)) = (
+                    get_node_text(child.child_by_field_name("object"), source),
+                    get_node_text(child.child_by_field_name("field"), source),
+                ) {
+                    if looks_like_constant(&field) {
+                        if let Some(owner) = ctx.resolve_type(&obj) {
+                            // `#`, not `.`: a Java member's qualified name is
+                            // `pkg.Type#member` throughout this indexer, and a
+                            // dotted spelling matches no declaration.
+                            let fqn = format!("{}{}{}", owner, MEMBER_SEP, field);
+                            if !uses.contains(&fqn) {
+                                uses.push(fqn);
+                            }
+                        }
+                    }
+                }
+            }
+            // `Foo::bar`, `this::handle`. A method handed somewhere without
+            // being invoked — the callback wiring every other language
+            // needed `value_refs` for.
+            "method_reference" => {
+                record_method_reference(&child, source, ctx, owner, value_refs);
+            }
+            // A local's declared type, and `Foo.class` literals.
+            "local_variable_declaration" | "class_literal" => {
+                if let Some(t) = get_node_text(child.child_by_field_name("type"), source) {
+                    record_type_refs(&t, ctx, type_refs);
+                }
+            }
+            _ => {}
+        }
+        collect_body_refs(&child, source, ctx, owner, uses, type_refs, value_refs);
+    }
+}
+
+/// `Type::member` or `this::member`, recorded as a reference to the member.
+fn record_method_reference(
+    node: &Node,
+    source: &[u8],
+    ctx: &FileCtx,
+    owner: Option<&TypeCtx>,
+    value_refs: &mut Vec<String>,
+) {
+    let mut cursor = node.walk();
+    let parts: Vec<Node> = node.children(&mut cursor).collect();
+    let Some(member) = parts
+        .iter()
+        .rev()
+        .find(|n| n.kind() == "identifier")
+        .and_then(|n| get_node_text(Some(*n), source))
+    else {
+        return;
+    };
+    let receiver = parts.first().filter(|n| n.kind() != "::");
+    let target_owner = match receiver.and_then(|n| get_node_text(Some(*n), source)) {
+        // `this::handle` names a member of the type being walked, which
+        // `resolve_type` cannot look up — `this` is not a type name.
+        Some(text) if text == "this" || text == "super" => owner.map(|o| o.fqn.clone()),
+        Some(text) => ctx.resolve_type(&text),
+        None => owner.map(|o| o.fqn.clone()),
+    };
+    if let Some(owner) = target_owner {
+        let fqn = format!("{}{}{}", owner, MEMBER_SEP, member);
+        if !value_refs.contains(&fqn) {
+            value_refs.push(fqn);
+        }
+    }
+}
+
 fn extract_calls(
     node: &Node,
     source: &[u8],

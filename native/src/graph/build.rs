@@ -835,14 +835,43 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                 // in the repo — which is how `QUERYABLE_PROPERTIES`, read
                 // from two other files, came to look unused.
                 let sep = crate::indexer::scope::module_sep(&file.language);
-                let Some(target_id) = qualified
+                let target_id = match qualified
                     .by_qualified
                     .get(used)
                     .or_else(|| qualified.by_path_suffix(used, sep))
-                else {
-                    continue;
+                    .cloned()
+                {
+                    Some(id) => id,
+                    // Last resort, and only for constants: match the bare
+                    // name. A concatenated browser bundle has no imports at
+                    // all, so a constant read from a sibling file gets
+                    // re-rooted under the *reading* module and matches
+                    // nothing — which is how a `CANVAS` read from a dozen
+                    // places came to have no inbound edge.
+                    //
+                    // Safe here in a way it is not for value references,
+                    // which is why only this arm has it: the name had to
+                    // pass `looks_like_constant` to be recorded at all,
+                    // `resolve_symbol` returns nothing when two files
+                    // declare it, and the `constant_ids` check below throws
+                    // away anything that resolved to a non-constant.
+                    None => {
+                        let bare = used.rsplit(sep).next().unwrap_or(used);
+                        match resolve_symbol(symbol_id_map, bare, &normalized_file_path) {
+                            Some(id) => id,
+                            None => continue,
+                        }
+                    }
                 };
-                if !constant_ids.contains(target_id) {
+                if !constant_ids.contains(&target_id) {
+                    continue;
+                }
+                // A declaration is not a use of itself. `export const
+                // MAX_ROWS = 200` walks its own declarator, so the
+                // constant recorded its own name and every TypeScript
+                // constant in a repo arrived with an in-degree of 1 —
+                // enough to make `dead_code` blind to all of them.
+                if target_id == sym_node_id {
                     continue;
                 }
                 edges.add(&sym_node_id, &target_id, GraphEdgeType::Uses);
@@ -892,6 +921,9 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
                 else {
                     continue;
                 };
+                if target_id == sym_node_id {
+                    continue;
+                }
                 edges.add(&sym_node_id, &target_id, GraphEdgeType::References);
                 resolution.resolved_qualified += 1;
             }

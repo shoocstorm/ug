@@ -802,7 +802,7 @@ fn attach_impl_traits(symbols: &mut [Symbol], impl_traits: &[(String, String)]) 
 /// through `use module::*`. The symbol table discards whichever candidate
 /// names nothing.
 fn record_type_refs(written: &str, ctx: &Ctx, out: &mut Vec<String>) {
-    for tok in crate::indexer::scope::type_idents(written) {
+    for tok in crate::indexer::scope::type_idents(written, "::") {
         let tail = tok.rsplit("::").next().unwrap_or(tok);
         let mut candidates = Vec::new();
         candidates.extend(ctx.scope.resolve_path(tok));

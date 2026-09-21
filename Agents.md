@@ -488,7 +488,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Twenty-two bugs this codebase keeps re-introducing
+## 9. Twenty-three bugs this codebase keeps re-introducing
 
 All are invisible in review and silent at runtime, and most have already
 shipped here more than once. Check for them by reflex.
@@ -1173,6 +1173,34 @@ code rather than as a missing feature:
 The rule: when the graph says nothing uses something, check how the *name* is
 written at its real use site before believing it. Adding a position to the
 walk is cheap and helps every query; working around a missing edge helps one.
+
+**Check all four indexers, not the one you are in.** Every gap above existed
+in more than one of them, and Java had all of them: on a six-file service
+fixture it drew two edges where a reader sees ten, because a Java dependency
+is almost always a *type* — a field, a parameter, a return — and no type
+position was read at all. TypeScript is a typed language that had no type
+edges. Python's annotations are the only place its type dependencies are
+written down. A fixture per language, with an obviously-unused symbol in it
+to catch fabricated edges, is the cheap way to find out; `tests/cross_file_resolution_test.rs`
+is where they live.
+
+### 9w. A declaration that counts as a use of itself
+
+`export const MAX_ROWS = 200` walks its own declarator, so the constant
+recorded a read of its own name, and **every TypeScript constant in any repo
+arrived with an in-degree of at least 1**. Nothing about the graph looked
+wrong — the edge was there, the count was plausible, and `dead_code` was
+simply blind to that entire node type forever.
+
+- A self-edge is never information for `Uses` or `References`. The graph
+  builder now drops them; only `Calls` may be a self-edge, because that is
+  recursion.
+- The tell is an in-degree that is suspiciously *uniform* across a node
+  type, not one that is zero. Zero gets looked at; one does not.
+- After removing a fake edge, expect the candidate list to get **longer**,
+  and check the new entries individually. Eleven of the twelve this exposed
+  were real reads that a different gap was hiding; the twelfth was genuinely
+  dead code that had been invisible since the constant was written.
 
 ## 10. Measuring performance without fooling yourself
 

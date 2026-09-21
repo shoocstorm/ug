@@ -1185,3 +1185,198 @@ impl Other { pub const ALL: &'static [Other] = &[Other::B]; }
         target.qualified_name
     );
 }
+
+// ─── The other three indexers ───────────────────────────────────────────
+//
+// Rust learned to read type positions, constant reads and module-scope
+// wiring; Java, TypeScript and Python were each missing some of the same.
+// Java was missing all of it: on a six-file service fixture it drew two
+// edges where a reader sees ten, because a Java dependency is almost always
+// a *type* — a field, a parameter, a return — and nothing read those.
+
+/// A Java class's fields and method signatures are where its dependencies
+/// are written. Neither was read, so a service had no edge to the
+/// repository it holds or the DTOs it is written in terms of.
+#[test]
+fn java_field_and_signature_types_are_references() {
+    let graph = run(&[
+        ("Order.java", "package com.ex;\npublic class Order { }\n"),
+        ("Reply.java", "package com.ex;\npublic class Reply { }\n"),
+        ("Unused.java", "package com.ex;\npublic class Unused { }\n"),
+        ("Repo.java", "package com.ex;\npublic class Repo { }\n"),
+        (
+            "Service.java",
+            r#"
+package com.ex;
+import java.util.List;
+public class Service {
+    private final Repo repo;
+    public Reply handle(Order order, List<Order> batch) { return null; }
+}
+"#,
+        ),
+    ]);
+
+    let fields = targets(&graph, "Service.repo", GraphEdgeType::References);
+    assert!(fields.contains("Repo"), "field type: got {fields:?}");
+
+    let sig = targets(&graph, "Service.handle", GraphEdgeType::References);
+    // `List<Order>` depends on `Order`, which is inside the brackets.
+    assert!(sig.contains("Order"), "generic argument: got {sig:?}");
+    assert!(sig.contains("Reply"), "return type: got {sig:?}");
+    assert!(!sig.contains("Unused"), "got {sig:?}");
+}
+
+/// Java keeps its thresholds in `static final` fields and reads them as
+/// `Limits.MAX_ROWS` — a field access, not a call, so the call walk never
+/// saw one and every Java constant looked unread.
+#[test]
+fn java_a_constant_read_through_its_type_is_a_use() {
+    let graph = run(&[
+        (
+            "Limits.java",
+            "package com.ex;\npublic final class Limits { public static final int MAX_ROWS = 200; }\n",
+        ),
+        (
+            "Query.java",
+            "package com.ex;\npublic class Query { public int cap() { return Limits.MAX_ROWS; } }\n",
+        ),
+    ]);
+
+    let used = targets(&graph, "Query.cap", GraphEdgeType::Uses);
+    assert!(used.contains("Limits.MAX_ROWS"), "got {used:?}");
+}
+
+/// `this::handle` hands a method somewhere without invoking it — the same
+/// callback wiring every other language needed `value_refs` for.
+#[test]
+fn java_a_method_reference_is_a_reference() {
+    let graph = run(&[(
+        "Service.java",
+        r#"
+package com.ex;
+public class Service {
+    void register() { submit(this::handle); }
+    void handle() { }
+    void other() { }
+    void submit(Runnable r) { }
+}
+"#,
+    )]);
+
+    let refs = targets(&graph, "Service.register", GraphEdgeType::References);
+    assert!(refs.contains("Service.handle"), "got {refs:?}");
+    assert!(!refs.contains("Service.other"), "got {refs:?}");
+}
+
+/// TypeScript is a typed language whose type positions were not read at
+/// all: an interface used only as a parameter or a field had no inbound
+/// edge from anything.
+#[test]
+fn ts_signature_and_field_types_are_references() {
+    let graph = run(&[
+        (
+            "src/models.ts",
+            "export interface Order { id: string }\nexport interface Reply { ok: boolean }\nexport interface Unused { x: number }\n",
+        ),
+        (
+            "src/service.ts",
+            r#"
+import { Order, Reply } from './models';
+export class Cache { all: Map<string, Order> = new Map(); }
+export function handle(o: Order): Reply { return { ok: true }; }
+"#,
+        ),
+    ]);
+
+    let fields = targets(&graph, "Cache", GraphEdgeType::References);
+    assert!(fields.contains("Order"), "field generic: got {fields:?}");
+
+    let sig = targets(&graph, "handle", GraphEdgeType::References);
+    assert!(sig.contains("Order"), "got {sig:?}");
+    assert!(sig.contains("Reply"), "got {sig:?}");
+    assert!(!sig.contains("Unused"), "got {sig:?}");
+}
+
+/// `export const MAX_ROWS = 200` walked its own declarator and recorded a
+/// use of its own name, so every TypeScript constant arrived with an
+/// in-degree of 1 — enough to hide all of them from `dead_code` forever.
+#[test]
+fn ts_a_constant_does_not_use_itself() {
+    let graph = run(&[(
+        "src/limits.ts",
+        "export const MAX_ROWS = 200;\nexport const UNREAD = 5;\n",
+    )]);
+
+    let self_edges: Vec<&str> = graph
+        .edges
+        .iter()
+        .filter(|e| e.source == e.target)
+        .map(|e| &*e.source)
+        .collect();
+    assert!(self_edges.is_empty(), "self-edges: {self_edges:?}");
+}
+
+/// Python annotations are the only place a type dependency is written
+/// down, and `list[Order]` names `Order` inside the brackets.
+#[test]
+fn py_annotations_are_references() {
+    let graph = run(&[
+        (
+            "pkg/models.py",
+            "class Order:\n    pass\nclass Reply:\n    pass\nclass Unused:\n    pass\n",
+        ),
+        (
+            "pkg/service.py",
+            r#"
+from pkg.models import Order, Reply
+
+
+class Cache:
+    head: Order
+
+
+def handle(order: Order, batch: list[Order]) -> Reply:
+    return Reply()
+"#,
+        ),
+    ]);
+
+    let sig = targets(&graph, "handle", GraphEdgeType::References);
+    assert!(sig.contains("Order"), "got {sig:?}");
+    assert!(sig.contains("Reply"), "got {sig:?}");
+    assert!(!sig.contains("Unused"), "got {sig:?}");
+
+    let fields = targets(&graph, "Cache", GraphEdgeType::References);
+    assert!(fields.contains("Order"), "annotated attribute: got {fields:?}");
+}
+
+/// Python runs its module body on import, and a script's entry call lives
+/// there. It belongs to no `def`, so it belongs to the file.
+#[test]
+fn py_module_level_code_is_attributed_to_the_file() {
+    let graph = run(&[(
+        "pkg/app.py",
+        "def wire():\n    pass\n\ndef never_called():\n    pass\n\nwire()\n",
+    )]);
+
+    let file = graph
+        .nodes
+        .iter()
+        .find(|n| n.id.starts_with("file:") && n.id.ends_with("app.py"))
+        .expect("file node");
+    let by_id: std::collections::HashMap<&str, &str> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.name.as_str()))
+        .collect();
+    let out: HashSet<String> = graph
+        .edges
+        .iter()
+        .filter(|e| &*e.source == file.id.as_str() && e.edge_type == GraphEdgeType::Calls)
+        .filter_map(|e| by_id.get(&*e.target).map(|s| s.to_string()))
+        .collect();
+
+    assert!(out.contains("wire"), "got {out:?}");
+    assert!(!out.contains("never_called"), "got {out:?}");
+}

@@ -1,10 +1,15 @@
 # Dead-code audit — 2026-09-20
 
-> **Updated 2026-09-21.** §5 records the indexer work that followed. The
-> candidate list this audit was built from went from 462 rows to 24 without
-> losing one of the eight real findings. §1–§4 are left exactly as written:
-> their numbers are what motivated the change, and §5 supersedes the counts
-> in §3.
+> **Updated 2026-09-21.** §5 and §6 record the indexer work that followed.
+> The candidate list this audit was built from went from 462 rows to 27
+> while *gaining* a ninth real finding. §1–§4 are left exactly as written:
+> their numbers are what motivated the change, and §5–§6 supersede the
+> counts in §3.
+>
+> One finding to add to §1: **`native/src/vis/js/07-tour.js` —
+> `TOUR_EXAMPLES`**, a module-level constant nothing reads. It was invisible
+> to the original audit because every TypeScript constant was recording a
+> use of *itself* (§6).
 
 What nothing in this repository references any more, checked exhaustively
 rather than sampled, plus what the check revealed about the `dead_code`
@@ -333,3 +338,102 @@ The remaining 16 false positives are three shapes:
 The honest floor is roughly this: the indexer can see every name that is
 *written*, and cannot see a name that is *computed*. Everything above was the
 first category.
+
+---
+
+## 6. The other three indexers
+
+§5 fixed Rust. Java, TypeScript and Python had overlapping versions of the
+same blindness, and Java had all of it.
+
+Each was measured the same way: a small multi-file fixture written the way
+people write that language, indexed, and every edge a reader would draw
+compared against every edge the graph actually had.
+
+### Java: 2 edges where a reader sees 10
+
+A six-file service fixture — a service holding a repository, taking DTOs,
+reading a constant, registering a method reference — produced exactly two
+non-structural edges: one `Calls` and one `Instantiates`. Everything else
+was missing, because **a Java dependency is almost always a type**, and no
+type position was read anywhere.
+
+| What was missing | Now |
+|---|---|
+| Field types (`private final Repo repo;`) | `References` from the field |
+| Parameter and return types, including generic arguments (`List<Order>`) | `References` from the method |
+| Record component types | `References` from the component |
+| Local declaration types and `Foo.class` literals | `References` from the method |
+| `static final` reads (`Limits.MAX_ROWS`) — a `field_access`, never a call | `Uses`, keyed `pkg.Type#MEMBER` |
+| Method references (`this::handle`, `Type::method`) | `References` |
+
+Java had no `type_refs`, no `uses` and no `value_refs` at all before this.
+The fixture now draws all ten.
+
+### TypeScript: a typed language with no type edges
+
+Signature and member types were not read, so an interface used only as a
+parameter or a field had no inbound edge from anything — which is how most
+interfaces are used. Now read: parameter and return types, class field
+types, interface property and method signatures, generic arguments
+(`Map<string, Order>`), union members (`Order | null`), array element types
+and callback parameter types.
+
+### Python: annotations and the module body
+
+Annotations are the only place a Python type dependency is written down.
+Now read: parameter and return annotations, and annotated class attributes
+— the dataclass/pydantic shape, where the whole model *is* its field
+annotations.
+
+Python also runs its module body on import, and a script's entry call, a
+registry being populated or an app being wired all live there. Those call
+sites belonged to no symbol and were dropped; they now leave the File node,
+the same as the TypeScript bundle wiring in §5.
+
+### A constant that used itself
+
+`export const MAX_ROWS = 200` walked its own declarator, so the constant
+recorded a read of its own name. **Every TypeScript constant in any repo
+arrived with an in-degree of at least 1** — enough to hide all of them from
+`dead_code` permanently. The graph builder now refuses a `Uses` or
+`References` edge from a symbol to itself.
+
+Removing those 113 fake edges exposed 12 constants, 11 of which were real
+cross-file reads the JS bundle could not resolve (it has no imports at all,
+so a constant read from a sibling file was re-rooted under the reading
+module and matched nothing). Those now fall back to a bare-name match —
+narrowly, and only for constants: the name had to pass `looks_like_constant`
+to be recorded, `resolve_symbol` returns nothing when two files declare it,
+and the target must already be a `Constant` node. The twelfth,
+`TOUR_EXAMPLES`, is genuinely dead.
+
+### Where that leaves the graph
+
+| | before §5 | after §6 |
+|---|---|---|
+| edges | 15 454 | **19 393** (+25%) |
+| `Calls` | 6 632 | **7 540** |
+| `References` | 1 273 | **3 529** (×2.8) |
+| `Uses` | 892 | **1 485** |
+| `dead_code` rows | 462 | **27** |
+| confirmed dead among them | 8 | **9** |
+| precision | 1.7% | **33%** |
+
+50 sampled `Uses` edges and 120 sampled `Calls`/`References`/`Uses` edges
+were checked against the source of the symbol they leave; all are real.
+(Apparent misses are `use … as ENV_GUARD` aliased imports — correct edges a
+text check cannot see.) The 34 remaining self-edges are all `Calls`, which
+is recursion. A full re-index stays byte-identical run to run, and total
+`ug gen` is ~2.6 s against ~2.5 s before any of this.
+
+### Still open
+
+- **Cross-file bare *value* references in the JS bundle** — `lanes.filter(walkLaneRevealed)`.
+  Unlike the constant case there is no naming convention to key on, so this
+  keeps the existing refusal.
+- **Methods on receivers the local type environment could not infer**, in
+  every language.
+- **Java annotation arguments naming classes** — `@JsonDeserialize(using = FooDeserializer.class)`
+  resolves only when written as a `class_literal` in a body, not inside an
+  annotation's argument text.
