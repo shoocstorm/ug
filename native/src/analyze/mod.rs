@@ -584,7 +584,8 @@ pub async fn coverage_for(
         .map(|(i, p)| format!("count(n.{}) AS c{}", p, i))
         .collect();
     let probe = format!(
-        "MATCH (n) RETURN count(*) AS total, {}",
+        "{} RETURN count(*) AS total, {}",
+        probe_scope(gql),
         projections.join(", ")
     );
 
@@ -611,6 +612,52 @@ pub async fn coverage_for(
             })
         })
         .collect()
+}
+
+/// The node set a coverage probe should count over.
+///
+/// The probe used to be `MATCH (n)` — every node in the graph — for every
+/// query, which made the line lie about exactly the presets that narrow to
+/// a node subtype. `orphan_files` reads a property only File nodes carry
+/// and reported `external_in_degree 4%`; `classes_by_members` reported
+/// `members 2%` when 107 of the 311 types it looks at have one. The doc on
+/// [`coverage_for`] says this warning is the one that tells a caller to
+/// distrust a number — so a denominator that is wrong by two orders of
+/// magnitude teaches them to ignore it.
+///
+/// **Narrow by node *type*, never by the query's value predicates.** Reusing
+/// the whole `WHERE` would look more precise and would destroy the warning:
+/// `where_to_start` filters on `has_doc = 1`, so a denominator built from
+/// its own predicate reports `has_doc 100%` whatever the graph holds. The
+/// question is "do the nodes this query is *about* carry the property",
+/// and a type restriction is the only part of a `WHERE` that answers it.
+/// That is also why `boundaries` still reads `boundary_kinds 2%`: it
+/// selects with `n.boundary = 1`, and honouring that would turn a real
+/// "boundaries were never indexed" into a confident 100%.
+///
+/// Deliberately shallow, like [`referenced_properties`], and with the same
+/// fallback: anything it does not recognise gets the whole graph, which is
+/// what it always got. A query whose first pattern binds anything other
+/// than `n` (every reachability preset: `(dep)-[…]->(t)`) is left global,
+/// because the properties it reads live on several bindings at once and no
+/// single node set is the right denominator.
+fn probe_scope(gql: &str) -> String {
+    let trimmed = gql.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("MATCH (n:") {
+        let label: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if !label.is_empty() && rest[label.len()..].starts_with(')') {
+            return format!("MATCH (n:{label})");
+        }
+    }
+    if trimmed.starts_with("MATCH (n)") {
+        if let Some(at) = gql.find("n.node_type IN [") {
+            let open = at + "n.node_type IN ".len();
+            if let Some(close) = gql[open..].find(']') {
+                return format!("MATCH (n) WHERE n.node_type IN {}", &gql[open..open + close + 1]);
+            }
+        }
+    }
+    "MATCH (n)".to_string()
 }
 
 /// Property names a query reads, as `<binding>.<name>`.
@@ -984,6 +1031,35 @@ mod tests {
     fn property_scan_deduplicates() {
         let props = referenced_properties("MATCH (n) WHERE n.loc > 1 RETURN n.loc AS loc");
         assert_eq!(props, vec!["loc".to_string()]);
+    }
+
+    /// The denominator has to be the nodes the query is about.
+    ///
+    /// A whole-graph count made `orphan_files` report its own new fact at
+    /// 4% and `classes_by_members` report `members` at 2%, on answers that
+    /// were entirely correct — and that warning is the one telling callers
+    /// to distrust a number.
+    #[test]
+    fn the_coverage_probe_counts_over_the_node_set_the_query_matched() {
+        assert_eq!(
+            probe_scope("MATCH (n:File) WHERE n.external_in_degree = 0 RETURN elementKey(n)"),
+            "MATCH (n:File)"
+        );
+        assert_eq!(
+            probe_scope(
+                "MATCH (n) WHERE n.node_type IN ['Class', 'Interface'] RETURN n.members"
+            ),
+            "MATCH (n) WHERE n.node_type IN ['Class', 'Interface']"
+        );
+        // A reachability preset reads properties off two bindings at once,
+        // so no single node set is its denominator. Left global, as before.
+        assert_eq!(
+            probe_scope("MATCH (dep)-[:Calls*1..3]->(t) WHERE t.file = $target RETURN dep.file"),
+            "MATCH (n)"
+        );
+        // Anything unrecognised falls back rather than guessing.
+        assert_eq!(probe_scope("MATCH (n) RETURN count(*)"), "MATCH (n)");
+        assert_eq!(probe_scope("  MATCH (n:Function) RETURN n.loc"), "MATCH (n:Function)");
     }
 
     #[test]

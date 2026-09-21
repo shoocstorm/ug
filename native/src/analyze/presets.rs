@@ -21,20 +21,31 @@
 //! caller asked. Only the visible window is ever formatted, so the wider
 //! limit costs memory rather than tokens.
 
-/// Edge labels that mean "depends on", for reachability presets.
+/// Edge labels that mean "depends on" — re-exported so a reader of this
+/// file finds the definition, not a fifth copy of it. See
+/// [`crate::types::IMPACT_EDGES`] for why there were four.
 ///
-/// `Contains` is deliberately absent. It is pure structure
-/// (Folder→File→Symbol), so including it would make every symbol in a
-/// file a "dependent" of its neighbours and turn a blast radius into a
-/// directory listing.
-pub const IMPACT_EDGES: &str = "Calls|References|Imports|Extends|Implements|Overrides";
+/// Preset queries splice the GQL form in with `concat!` and
+/// [`crate::impact_edges_gql`], because a `gql` field is a `&'static str`
+/// and `concat!` only takes literals.
+pub use crate::impact_edges_gql;
+pub use crate::types::IMPACT_EDGES;
 
 /// Node types that are code, as a GQL list literal.
 ///
 /// Markdown headings are indexed as `Concept` nodes — 362 of 2280 in this
 /// repo — so a statistic that forgets to exclude them is wrong on any
 /// project with docs. `File` and `Folder` are containers, not symbols.
-pub const CODE_TYPES: &str = "['Function', 'Class', 'Interface', 'Constant', 'Variable']";
+/// [`CODE_TYPES`] as a literal, for splicing into a preset's `gql` with
+/// `concat!` — which only accepts literals, so the const alone cannot be
+/// used there. `code_types_agree` keeps the two identical.
+macro_rules! code_types {
+    () => {
+        "['Function', 'Class', 'Interface', 'Constant', 'Variable']"
+    };
+}
+
+pub const CODE_TYPES: &str = code_types!();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -193,26 +204,45 @@ pub static BUILTIN: &[Preset] = &[
     Preset {
         name: "biggest_files",
         category: Category::Census,
-        description: "Files with the most indexed symbols — where the mass is.",
+        // `CODE_TYPES`, not "everything that is not a File or Folder". A
+        // markdown heading is indexed as a `Concept`, so the old filter
+        // counted them as symbols and put `PERF-TUNING-JOURNEY.md` (90
+        // headings) and two READMEs in the top of a list headed "where the
+        // mass is". The constant right below this one documents that exact
+        // trap; this preset was not using it.
+        //
+        // `code_lines` because a symbol count alone ranks a file of 163
+        // one-line helpers above one holding five 300-line functions.
+        description: "Files with the most indexed code symbols, and how many lines of code they hold — where the mass is.",
         params: NO_PARAMS,
-        gql: "MATCH (n) \
-              WHERE n.node_type <> 'File' AND n.node_type <> 'Folder' AND n.file <> '' \
-              RETURN n.file AS file, count(*) AS symbols \
-              ORDER BY symbols DESC \
-              LIMIT 200",
+        gql: concat!("MATCH (n) \
+              WHERE n.node_type IN ", code_types!(), " AND n.file <> '' \
+              RETURN n.file AS file, count(*) AS symbols, sum(n.code_lines) AS code_lines \
+              ORDER BY symbols DESC, file ASC \
+              LIMIT 200"),
         headline: None,
         next: NO_NEXT,
     },
     Preset {
         name: "language_breakdown",
         category: Category::Census,
-        description: "What this repo is written in: symbols and code lines per language.",
+        // Same `CODE_TYPES` omission as `biggest_files`, and worse here
+        // because both columns were wrong at once: markdown reported 645
+        // "symbols" (they are headings) and 29,953 "code lines" (that is
+        // prose — `line_metrics` has no comment syntax for markdown, so
+        // every non-blank line counts as code). A language census that
+        // lists markdown beside rust invites exactly the comparison the
+        // numbers cannot support.
+        //
+        // Documentation is not lost, it is answered by the preset that can
+        // answer it: `file_kinds` counts doc files and their lines.
+        description: "What this repo is written in: code symbols and code lines per language. Docs are counted by file_kinds, not here.",
         params: NO_PARAMS,
-        gql: "MATCH (n) \
-              WHERE n.language IS NOT NULL AND n.node_type <> 'File' AND n.node_type <> 'Folder' \
+        gql: concat!("MATCH (n) \
+              WHERE n.language IS NOT NULL AND n.node_type IN ", code_types!(), " \
               RETURN n.language AS language, count(*) AS symbols, \
                      sum(n.code_lines) AS code_lines \
-              ORDER BY symbols DESC",
+              ORDER BY symbols DESC, language ASC"),
         headline: None,
         next: NO_NEXT,
     },
@@ -351,11 +381,15 @@ pub static BUILTIN: &[Preset] = &[
     Preset {
         name: "classes_by_members",
         category: Category::Size,
-        // Only meaningful where the language nests members inside the type
-        // body. A Rust struct's methods live in a separate `impl` block, so
-        // it has no members fact at all and the coverage line will say so
-        // rather than ranking every Rust type as memberless.
-        description: "Types with the most declared members. Only populated for languages that nest members in the type body (Java, Python, TS) — check coverage.",
+        // This said "only populated for Java, Python, TS — check coverage",
+        // which was wrong twice over. Rust `impl` blocks *do* attach their
+        // methods to the type, so 107 of this repo's 311 types carry a
+        // count; and the coverage line it told the reader to check was
+        // itself reporting `members 2%` because its denominator was every
+        // node in the graph rather than the types this query looks at. A
+        // correct answer, with a description and a caveat both telling the
+        // caller to throw it away.
+        description: "Types with the most declared members — a class body's fields and methods, and a Rust type's impl blocks. A type nobody wrote members for is absent rather than zero.",
         params: NO_PARAMS,
         gql: "MATCH (n) \
               WHERE n.node_type IN ['Class', 'Interface'] AND n.members IS NOT NULL \
@@ -421,8 +455,9 @@ pub static BUILTIN: &[Preset] = &[
               RETURN n.node_type AS kind, \
                      count(*) AS total, \
                      sum(n.has_comments) AS commented, \
-                     sum(n.has_doc) AS with_doc_comment \
-              ORDER BY total DESC",
+                     sum(n.has_doc) AS with_doc_comment, \
+                     sum(n.has_comments) * 100 / count(*) AS commented_pct \
+              ORDER BY total DESC, kind ASC",
         headline: None,
         next: NO_NEXT,
     },
@@ -496,8 +531,9 @@ pub static BUILTIN: &[Preset] = &[
         params: NO_PARAMS,
         gql: "MATCH (n) \
               WHERE n.node_type IN ['Function', 'Class', 'Interface'] \
-              RETURN n.node_type AS kind, count(*) AS total, sum(n.has_doc) AS documented \
-              ORDER BY total DESC",
+              RETURN n.node_type AS kind, count(*) AS total, sum(n.has_doc) AS documented, \
+                     sum(n.has_doc) * 100 / count(*) AS documented_pct \
+              ORDER BY total DESC, kind ASC",
         headline: None,
         next: NO_NEXT,
     },
@@ -690,11 +726,16 @@ pub static BUILTIN: &[Preset] = &[
         category: Category::Architecture,
         description: "Which folders depend on which, by edge count across the folder boundary.",
         params: NO_PARAMS,
-        gql: "MATCH (a)-[:Calls|References|Imports|Extends|Implements]->(b) \
+        // Same edge set as every other dependency question — see
+        // `IMPACT_EDGES`. This preset and `layering_violations` each
+        // carried their own spelling, which dropped `Overrides` on top of
+        // the `Instantiates`/`Uses` gap: three lists, one meaning, and only
+        // the constant knew it was the answer (Agents.md §9c).
+        gql: concat!("MATCH (a)-[:", impact_edges_gql!(), "]->(b) \
               WHERE a.folder <> b.folder \
               RETURN a.folder AS from_folder, b.folder AS to_folder, count(*) AS edges \
-              ORDER BY edges DESC \
-              LIMIT 200",
+              ORDER BY edges DESC, from_folder ASC, to_folder ASC \
+              LIMIT 200"),
         headline: None,
         next: NO_NEXT,
     },
@@ -716,11 +757,11 @@ pub static BUILTIN: &[Preset] = &[
                 list: false,
             },
         ],
-        gql: "MATCH (a)-[:Calls|References|Imports]->(b) \
+        gql: concat!("MATCH (a)-[:", impact_edges_gql!(), "]->(b) \
               WHERE a.folder STARTS WITH $from_prefix AND b.folder STARTS WITH $to_prefix \
               RETURN a.file AS from_file, b.file AS to_file, count(*) AS edges \
-              ORDER BY edges DESC \
-              LIMIT 200",
+              ORDER BY edges DESC, from_file ASC, to_file ASC \
+              LIMIT 200"),
         headline: None,
         next: NO_NEXT,
     },
@@ -779,19 +820,34 @@ pub static BUILTIN: &[Preset] = &[
         ],
     },
     // ── tests ─────────────────────────────────────────────────────────
+    // Two problems, and the column name was the smaller one. `functions`
+    // counted *all* functions including the tests, so `native/tests` read
+    // "459 functions, 459 tests" and every other row needed a subtraction
+    // before it meant anything.
+    //
+    // The ordering was the real defect: `functions DESC` ranks by folder
+    // size, so a preset called `test_ratio` put the biggest folder first
+    // and buried the untested ones. `native/src/graph` (46 source
+    // functions, 0 co-located tests) sat twelfth. Sorting on the ratio is
+    // what the name always promised (Agents.md §11j).
+    //
+    // The denominator is all functions, not `source`, because a folder that
+    // is entirely tests divides by zero — and OverGraph rejects the query
+    // rather than returning a number, which is how this was found.
     Preset {
         name: "test_ratio",
         category: Category::Tests,
-        description: "Test versus source function counts per folder.",
+        description: "Least-tested folders first, by the share of functions that are tests. Counts where tests LIVE, so a repo with a top-level tests/ dir shows zeros next to its source folders — use untested_symbols for reachability.",
         params: NO_PARAMS,
         gql: "MATCH (n:Function) \
-              WITH n.folder AS folder, count(*) AS functions, sum(n.is_test) AS tests \
-              WHERE functions >= 5 \
-              RETURN folder, functions, tests \
-              ORDER BY functions DESC \
+              WITH n.folder AS folder, count(*) AS all_functions, sum(n.is_test) AS tests \
+              WHERE all_functions >= 5 \
+              RETURN folder, all_functions - tests AS source, tests, \
+                     tests * 100 / all_functions AS test_pct \
+              ORDER BY test_pct ASC, source DESC, folder ASC \
               LIMIT 200",
         headline: None,
-        next: NO_NEXT,
+        next: &[("analyze untested_symbols", "which symbols no test reaches, wherever the tests live")],
     },
     Preset {
         name: "untested_symbols",
@@ -825,11 +881,11 @@ pub static BUILTIN: &[Preset] = &[
         category: Category::Tests,
         description: "Which test files exercise code reachable from a target file — what to re-run after changing it.",
         params: TARGET,
-        gql: "MATCH (dep)-[:Calls|References|Imports|Extends|Implements|Overrides*1..3]->(t) \
+        gql: concat!("MATCH (dep)-[:", impact_edges_gql!(), "*1..3]->(t) \
               WHERE t.file = $target AND dep.is_test = 1 \
               RETURN dep.file AS test_file, count(DISTINCT elementKey(dep)) AS test_symbols \
               ORDER BY test_symbols DESC \
-              LIMIT 200",
+              LIMIT 200"),
         headline: None,
         next: NO_NEXT,
     },
@@ -842,11 +898,11 @@ pub static BUILTIN: &[Preset] = &[
         // test symbols. 2 hops: a test usually calls the symbol directly or
         // through one helper, and an unanchored 3-hop walk from every test
         // node is the cap-blowing shape `untested_symbols` already documents.
-        gql: "MATCH (t)-[:Calls|References|Imports|Extends|Implements|Overrides*1..2]->(n) \
+        gql: concat!("MATCH (t)-[:", impact_edges_gql!(), "*1..2]->(n) \
               WHERE elementKey(n) = $symbol AND t.is_test = 1 \
               RETURN elementKey(t) AS test, t.file AS file, count(*) AS paths \
               ORDER BY paths DESC \
-              LIMIT 200",
+              LIMIT 200"),
         headline: None,
         next: NO_NEXT,
     },
@@ -859,11 +915,11 @@ pub static BUILTIN: &[Preset] = &[
         // changed files via `IN $files`. Dependents inside the changed set
         // are excluded — a changed file reaching another changed file is the
         // change itself, not something a test run would catch.
-        gql: "MATCH (dep)-[:Calls|References|Imports|Extends|Implements|Overrides*1..3]->(t) \
+        gql: concat!("MATCH (dep)-[:", impact_edges_gql!(), "*1..3]->(t) \
               WHERE t.file IN $files AND dep.is_test = 1 AND NOT (dep.file IN $files) \
               RETURN dep.file AS test_file, count(DISTINCT elementKey(dep)) AS test_symbols \
               ORDER BY test_symbols DESC \
-              LIMIT 200",
+              LIMIT 200"),
         headline: None,
         next: NO_NEXT,
     },
@@ -878,13 +934,13 @@ pub static BUILTIN: &[Preset] = &[
         // count reports the number of routes to the target, not the
         // number of dependents. On this repo that is the difference
         // between 948 and 11.
-        gql: "MATCH (dep)-[:Calls|References|Imports|Extends|Implements|Overrides*1..3]->(t) \
+        gql: concat!("MATCH (dep)-[:", impact_edges_gql!(), "*1..3]->(t) \
               WHERE t.file = $target AND dep.file <> $target \
               RETURN dep.file AS file, \
                      count(DISTINCT elementKey(dep)) AS dependents, \
-                     sum(dep.is_test) AS test_paths \
+                     count(DISTINCT CASE WHEN dep.is_test = 1 THEN elementKey(dep) END) AS tests \
               ORDER BY dependents DESC \
-              LIMIT 200",
+              LIMIT 200"),
         headline: None,
         next: NO_NEXT,
     },
@@ -897,13 +953,13 @@ pub static BUILTIN: &[Preset] = &[
         // row per path, so `count(DISTINCT elementKey(dep))` is the only
         // honest dependent count. `dep.file NOT IN $files` keeps a changed
         // file from counting as its own blast radius.
-        gql: "MATCH (dep)-[:Calls|References|Imports|Extends|Implements|Overrides*1..3]->(t) \
+        gql: concat!("MATCH (dep)-[:", impact_edges_gql!(), "*1..3]->(t) \
               WHERE t.file IN $files AND NOT (dep.file IN $files) \
               RETURN dep.file AS file, \
                      count(DISTINCT elementKey(dep)) AS dependents, \
-                     sum(dep.is_test) AS test_paths \
+                     count(DISTINCT CASE WHEN dep.is_test = 1 THEN elementKey(dep) END) AS tests \
               ORDER BY dependents DESC \
-              LIMIT 200",
+              LIMIT 200"),
         headline: None,
         next: NO_NEXT,
     },
@@ -912,10 +968,10 @@ pub static BUILTIN: &[Preset] = &[
         category: Category::Risk,
         description: "One-line blast radius for a file: how many symbols and files reach it.",
         params: TARGET,
-        gql: "MATCH (dep)-[:Calls|References|Imports|Extends|Implements|Overrides*1..3]->(t) \
+        gql: concat!("MATCH (dep)-[:", impact_edges_gql!(), "*1..3]->(t) \
               WHERE t.file = $target AND dep.file <> $target \
               RETURN count(DISTINCT elementKey(dep)) AS dependents, \
-                     count(DISTINCT dep.file) AS files_affected",
+                     count(DISTINCT dep.file) AS files_affected"),
         headline: Some("dependents"),
         next: NO_NEXT,
     },
@@ -944,14 +1000,14 @@ pub static BUILTIN: &[Preset] = &[
         // is the ceiling that actually completes. The 4-hop wishful
         // version passed its test only because the seeded graph is 2 hops
         // deep — see `boundary_impact_reports_the_surface_a_change_is_visible_through`.
-        gql: "MATCH (b)-[:Calls|References|Imports|Extends|Implements|Overrides*1..3]->(t) \
+        gql: concat!("MATCH (b)-[:", impact_edges_gql!(), "*1..3]->(t) \
               WHERE t.file = $target AND b.boundary_in = 1 AND b.file <> $target \
               RETURN elementKey(b) AS surface, \
                      b.boundary_kinds AS kinds, \
                      b.boundary_detail AS exposed_as, \
                      count(*) AS paths \
               ORDER BY paths DESC \
-              LIMIT 200",
+              LIMIT 200"),
         headline: None,
         next: &[
             ("find_usages <symbol>", "the symbol-level callers, where this answer is file-level"),
@@ -977,6 +1033,13 @@ pub static BUILTIN: &[Preset] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The const and the macro form of the code-type list must agree —
+    /// the same trap `impact_edges_agree` guards, one file over.
+    #[test]
+    fn code_types_agree() {
+        assert_eq!(CODE_TYPES, code_types!());
+    }
 
     #[test]
     fn preset_names_are_unique() {

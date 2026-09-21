@@ -561,7 +561,17 @@ pub struct Dependency {
 ///   files and not at all on others. A reader seeing version < 7 must treat
 ///   a file's `loc` as **absent**, not zero, and say so rather than
 ///   reporting a sum it cannot justify.
-pub const GRAPH_SCHEMA_VERSION: u32 = 7;
+/// - **8**: Python symbols carry a `docstring`. Before this, `python.rs`
+///   called the shared JSDoc scanner, which looks for a `/** … */` block
+///   *above* a node — and a Python docstring is the first statement inside
+///   the body, so it found nothing, ever. On a version < 8 graph every
+///   Python symbol has `has_doc = 0` and `doc_lines = 0`, which is
+///   indistinguishable from a genuinely undocumented codebase: on one
+///   12.8k-node sample that was 3,449 functions reported at 0% documented,
+///   and `where_to_start` (which requires `has_doc = 1`) returned no Python
+///   at all. A reader seeing version < 8 must treat every Python doc figure
+///   as **absent**, not zero.
+pub const GRAPH_SCHEMA_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexStats {
@@ -714,6 +724,53 @@ impl GraphEdgeType {
         Self::Instantiates,
     ];
 }
+
+/// The GQL alternation for [`IMPACT_EDGES`], as a literal.
+///
+/// A macro rather than a `const` because preset queries are `&'static str`
+/// built with [`concat!`], which only accepts literals. `impact_edges_agree`
+/// asserts this expands to exactly the names in `IMPACT_EDGES`, so the two
+/// forms cannot drift.
+#[macro_export]
+macro_rules! impact_edges_gql {
+    () => {
+        "Calls|References|Imports|Extends|Implements|Overrides|Instantiates|Uses"
+    };
+}
+
+/// Edge types that mean "this code depends on that code".
+///
+/// **One definition, because there were four.** `analyze::presets`,
+/// `coupling_matrix`/`layering_violations` inline, `walk`, and
+/// `facts::FactContext`'s in-degree each answered this question
+/// separately, under the same name and the same doc comment, and all four
+/// answered it differently — presets dropped `Instantiates` and `Uses`,
+/// `walk` dropped `Imports` and `Uses`, the two architecture presets also
+/// dropped `Overrides`, and in-degree counted everything. So `dead_code`
+/// and `impact` disagreed about what a dependency is, and `ug walk` and
+/// `ug analyze impact` disagreed again (Agents.md §9c).
+///
+/// `Contains` is deliberately absent: it is pure structure
+/// (Folder→File→Symbol), and counting it makes every symbol a dependent of
+/// its neighbours. `Exports`, `DependsOn` and `Requires` are out for the
+/// same reason one level up — they are file- and package-level structure,
+/// and walking `Exports` makes a file a dependent of the symbols it
+/// declares (Agents.md §11b).
+///
+/// `Instantiates` is a resolved call site — [`crate::graph`]'s
+/// `edge_for_call` emits it instead of `Calls` when the callee is a
+/// constructor — and `Uses` is a symbol reading a constant. Leaving them
+/// out understated `impact` on this repo's constants file by 4.5×.
+pub const IMPACT_EDGES: &[GraphEdgeType] = &[
+    GraphEdgeType::Calls,
+    GraphEdgeType::References,
+    GraphEdgeType::Imports,
+    GraphEdgeType::Extends,
+    GraphEdgeType::Implements,
+    GraphEdgeType::Overrides,
+    GraphEdgeType::Instantiates,
+    GraphEdgeType::Uses,
+];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GraphNode {
@@ -996,4 +1053,42 @@ pub struct ResolutionStats {
     /// ambiguous name ends up.
     #[serde(rename = "droppedUnresolved")]
     pub dropped_unresolved: u32,
+}
+
+#[cfg(test)]
+mod impact_edge_tests {
+    use super::*;
+
+    /// The two forms of [`IMPACT_EDGES`] must list the same labels.
+    ///
+    /// They have to exist separately — GQL wants a `|` alternation in a
+    /// string literal, `walk` wants values to compare against — and a pair
+    /// of hand-written lists is exactly the shape that shipped four
+    /// disagreeing copies of this set. Nothing else notices: a missing
+    /// label does not fail to compile or to run, it returns a smaller
+    /// number.
+    #[test]
+    fn impact_edges_agree() {
+        let from_slice: Vec<&str> = IMPACT_EDGES.iter().map(|e| e.as_str()).collect();
+        let from_gql: Vec<&str> = impact_edges_gql!().split('|').collect();
+        assert_eq!(from_slice, from_gql);
+    }
+
+    /// `Contains` in this set turns a blast radius into a directory
+    /// listing, and `Exports` makes a file a dependent of its own symbols.
+    #[test]
+    fn structural_edges_are_not_dependencies() {
+        for structural in [
+            GraphEdgeType::Contains,
+            GraphEdgeType::Exports,
+            GraphEdgeType::DependsOn,
+            GraphEdgeType::Requires,
+        ] {
+            assert!(
+                !IMPACT_EDGES.contains(&structural),
+                "{} is structure, not a dependency",
+                structural.as_str()
+            );
+        }
+    }
 }

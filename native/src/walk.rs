@@ -44,22 +44,15 @@ use crate::git::{self, ChangeStatus, DiffSummary, GitError, RevSpec};
 use crate::tour::{
     self, Candidates, StopChange, Tour, TourEdge, TourOptions, TourProgress, ProgressFn,
 };
-use crate::types::{GraphData, GraphEdgeType, GraphNodeType};
+use crate::types::{GraphData, GraphEdgeType, GraphNodeType, IMPACT_EDGES};
 use ultragraph::storage::facts::is_test_node;
 use ultragraph::storage::ContextItem;
 
-/// Edge types that mean "this code depends on that code". `Contains` is
-/// deliberately absent: a file containing a changed function is not
-/// affected by it, and including structural containment makes every
-/// changed symbol's blast radius its own file.
-const IMPACT_EDGES: [GraphEdgeType; 6] = [
-    GraphEdgeType::Calls,
-    GraphEdgeType::References,
-    GraphEdgeType::Instantiates,
-    GraphEdgeType::Overrides,
-    GraphEdgeType::Implements,
-    GraphEdgeType::Extends,
-];
+// `IMPACT_EDGES` comes from `crate::types` now. This file used to keep its
+// own six-element copy, which dropped `Imports` and `Uses` while the
+// `analyze` presets' copy dropped `Instantiates` and `Uses` — so `ug walk`
+// and `ug analyze impact` gave different answers to "what does this change
+// reach" on the same commit. See `crate::types::IMPACT_EDGES`.
 
 /// How many unchanged neighbours a walk may add per changed symbol. The
 /// ring exists to show what the change *reaches*, and a symbol called from

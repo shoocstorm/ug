@@ -49,6 +49,15 @@ pub struct GraphSchemaResult {
     /// as untested production code — a wrong answer wearing the shape of a
     /// right one, which is exactly what this manifest exists to flag.
     pub stale_test_flags: bool,
+    /// Whether this graph predates Python docstring extraction
+    /// (`GRAPH_SCHEMA_VERSION` 8).
+    ///
+    /// The same shape as [`Self::stale_test_flags`] and worse in degree: on
+    /// such a graph *every* Python symbol reports `has_doc = 0`, so the
+    /// whole documentation preset family answers "0% documented" about a
+    /// codebase that may be fully documented, and `where_to_start` returns
+    /// no Python symbol at all. Nothing in those answers looks wrong.
+    pub stale_python_docs: bool,
     /// How confidently each call site was resolved into an edge.
     ///
     /// The edge set is best-effort: a callee the resolver cannot place
@@ -145,6 +154,7 @@ pub fn graph_schema(graph: &GraphData, graph_path: &Path) -> GraphSchemaResult {
         // untested production code, which is a wrong answer that looks
         // exactly like a right one.
         stale_test_flags: schema.map(|v| v < 6).unwrap_or(true),
+        stale_python_docs: schema.map(|v| v < 8).unwrap_or(true),
         call_resolution: graph.resolution.clone(),
     }
 }
@@ -192,6 +202,24 @@ pub fn render_graph_schema(r: &GraphSchemaResult, style: Render) -> String {
         }
     }
     out.push('\n');
+
+    if r.stale_python_docs {
+        line(
+            &mut out,
+            &format!(
+                "{} {} {}",
+                style.bold("Python docs"),
+                style.dim(
+                    "STALE — this graph predates Python docstring extraction, so every \
+                     Python symbol reports has_doc = 0 and doc_coverage answers 0% for a \
+                     codebase that may be fully documented. Non-Python answers are \
+                     unaffected. Run"
+                ),
+                style.id("ug gen")
+            ),
+        );
+        out.push('\n');
+    }
 
     if r.stale_test_flags {
         line(

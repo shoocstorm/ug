@@ -2258,6 +2258,91 @@ Two more from the same pass, worth having on their own:
 Full audit, including what was rejected with the number that killed it:
 `docs/dev/PRESET-AUDIT.md`.
 
+### 11k. Run the tool against a repo in the language you did not write it in
+
+A second pass over the same presets, this time against a Python/TypeScript
+index and a Java one as well as this repo, found two things that cannot be
+seen from a Rust checkout at all.
+
+**`has_doc` was 0 for all 3,449 Python functions**, because `python.rs` called
+the shared `common::extract_docstring` — which scans the 200 bytes *before* a
+node for a `/** … */` block. Python's docstring is the first statement
+*inside* the body, so the call returned `None` every time. Seven presets read
+that fact, so `doc_coverage` reported every Python folder at 0.0%, and
+`where_to_start` — which requires `has_doc = 1` — could not return a Python
+symbol at all. On this repo every one of those presets looked perfect.
+
+**A shared helper whose name describes the goal, not the mechanism, is where
+this hides.** `extract_docstring` sounds language-neutral and is a JSDoc
+scanner; Rust and Java each grew their own (`extract_rust_docstring`,
+`extract_javadoc`) and Python was left pointed at the generic one. The tell was
+available and nobody asked for it: a per-language `sum(has_doc)` is one query.
+**Before trusting a cross-language statistic, group it by language and look
+for a zero.** A language that contributes 0 to a fact every other language
+populates is a bug, not a finding about that codebase.
+
+Related: the test that should have caught it,
+`a_function_carries_its_signature_docstring_and_metrics`, was *named* for the
+docstring and asserted the signature and the metrics. A name is not an
+assertion.
+
+### 11l. Four implementations of one constant, under one name
+
+`IMPACT_EDGES` — "edge types that mean this code depends on that code" —
+existed four times: in `analyze::presets`, spelled out again inline in
+`coupling_matrix`/`layering_violations`, in `walk`, and implicitly in
+`facts::FactContext`'s in-degree. Same name, near-identical doc comments about
+why `Contains` is excluded, **and no two sets were equal**: presets dropped
+`Instantiates` and `Uses`, `walk` dropped `Imports` and `Uses`, the
+architecture presets also dropped `Overrides`, in-degree counted everything.
+So `ug analyze dead_code` and `ug analyze impact` disagreed about what a
+dependency is, and `ug walk` disagreed with both.
+
+`Instantiates` is a resolved call site (`edge_for_call` emits it instead of
+`Calls` for a constructor) and `Uses` is a symbol reading a constant. Leaving
+them out understated `impact` on this repo's constants file **4.5×** — 94
+dependents where the answer is 419.
+
+Two rules:
+
+- **When you find a constant, grep its name across the tree before using it.**
+  Duplicates here were not copies of a literal; they were re-derivations of a
+  *list*, each written by someone who had thought about the problem. That is
+  why they diverged and why none of them looked wrong.
+- **A list that must exist in two forms needs a test that they agree.** GQL
+  wants a `|` alternation in a string literal and `walk` wants values to
+  compare, so one definition cannot serve both — but `impact_edges_agree` can
+  assert they expand to the same names. Nothing else notices a missing label:
+  it does not fail to compile or to run, it returns a smaller number.
+
+And the measurement lesson, which nearly closed the investigation: **the first
+two files measured moved by 0 and +7 dependents.** The effect only appears on a
+file whose consumers arrive by the missing edge type. When a change looks like
+it does nothing, check whether the cases you sampled can express it — see
+§11i.
+
+### 11m. A denominator that is not about what you asked
+
+`analyze`'s coverage line probes `MATCH (n) RETURN count(*), count(n.prop)` —
+every node in the graph, whatever the query matched. So a preset that narrows
+to a node subtype reported its own properties as barely indexed:
+`orphan_files` said `external_in_degree 4%` where 100% of the File nodes it
+looks at carry it, and `classes_by_members` said `members 2%` where the figure
+over the types it looks at is 34%. That preset's description then told the
+reader to "check coverage".
+
+The function's own doc comment already said this warning is the one that tells
+a caller to distrust a number, "so crying wolf teaches them to ignore the real
+thing" — and the denominator was doing exactly that, on the presets most
+likely to be right.
+
+**Scope a denominator to the population the question is about — by *type*,
+never by the query's value predicates.** Reusing the whole `WHERE` looks more
+precise and destroys the warning: `where_to_start` filters on `has_doc = 1`, so
+a denominator built from its own predicate reports `has_doc 100%` whatever the
+graph holds. A type restriction is the only part of a filter that answers "do
+the things this query is about carry the property".
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

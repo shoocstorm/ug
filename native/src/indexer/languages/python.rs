@@ -1,8 +1,8 @@
 //! Python indexer. Handles `.py`.
 
 use crate::indexer::common::{
-    annotation_args, calculate_nesting, extract_docstring, extract_params_from_signature,
-    extract_return_type, first_string_arg, get_node_text, imports_in_stable_order};
+    annotation_args, calculate_nesting, extract_params_from_signature, extract_return_type,
+    first_string_arg, get_node_text, imports_in_stable_order};
 use crate::indexer::languages::{FileContext, LanguageIndexer};
 use crate::indexer::scope::{
     base_type_name, looks_like_constant, looks_like_type, module_path, CallSink, ImportScope,
@@ -280,6 +280,68 @@ fn extract_imports_via_regex(source: &[u8]) -> Vec<ImportInfo> {
 ///
 /// Python hangs them off a `decorated_definition` wrapper rather than on the
 /// definition itself, so this walks up one level. The name keeps its dotted
+/// The first string literal in a `def`/`class` body, which is what Python
+/// calls a docstring.
+///
+/// Python does not put its documentation *above* the symbol, and the shared
+/// [`crate::indexer::common::extract_docstring`] only knows how to find a
+/// `/** … */` block in the 200 bytes before a node. Calling it from here
+/// therefore returned `None` for every Python symbol ever indexed — on a
+/// 3,449-function Python repo, `has_doc` was 0 for all 3,449, `doc_lines`
+/// was 0 everywhere, and the whole `documentation` preset family reported a
+/// confident zero. `where_to_start`, which requires `has_doc = 1`, could not
+/// return a Python symbol at all.
+///
+/// The shape is `body: block` → first `expression_statement` → `string`.
+/// Only the *first* statement counts: a string in the middle of a body is an
+/// expression nobody wrote as documentation.
+///
+/// `string_content` is preferred where the grammar exposes it, because it
+/// excludes the quote delimiters without having to guess whether they were
+/// `"""`, `'''`, `"` or an `r`/`f` prefix. The fallback trims them, for a
+/// grammar version that emits the string as one leaf.
+fn extract_python_docstring(node: &Node, source: &[u8]) -> Option<String> {
+    let body = node.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    let first = body.named_children(&mut cursor).next()?;
+    if first.kind() != "expression_statement" {
+        return None;
+    }
+    let mut inner = first.walk();
+    let literal = first
+        .named_children(&mut inner)
+        .find(|n| n.kind() == "string")?;
+
+    let mut content = literal.walk();
+    let raw = match literal
+        .named_children(&mut content)
+        .find(|n| n.kind() == "string_content")
+    {
+        Some(c) => get_node_text(Some(c), source)?,
+        None => {
+            let text = get_node_text(Some(literal), source)?;
+            text.trim_start_matches(['r', 'R', 'b', 'B', 'f', 'F', 'u', 'U'])
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string()
+        }
+    };
+
+    // Re-joined rather than returned raw so `annotate_line_metrics` counts
+    // the same non-blank lines it counts for every other language, and so a
+    // triple-quoted block does not carry its source indentation into the
+    // stored text.
+    let clean: Vec<&str> = raw
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if clean.is_empty() {
+        return None;
+    }
+    Some(clean.join("\n"))
+}
+
 /// receiver — `app.route`, not `route` — because in Python the receiver *is*
 /// the framework: `@app.route` and `@celery.task` share a last segment with
 /// plenty of ordinary methods, and dropping it would make a decorator
@@ -356,7 +418,7 @@ fn extract_symbol_from_node(
             let (calls, call_refs, uses, value_refs) =
                 extract_calls(node, source, ctx, owner, &params);
             let type_refs = signature_type_refs(&params, return_type.as_deref(), ctx);
-            let docstring = extract_docstring(node, source);
+            let docstring = extract_python_docstring(node, source);
             let metrics = SymbolMetrics {
                 // Inclusive of both the first and last line, matching the
                 // span fallback used for symbols that carry no metrics.
@@ -417,7 +479,7 @@ fn extract_symbol_from_node(
                 file: String::new(),
                 start_line: start,
                 end_line: end,
-                docstring: extract_docstring(node, source),
+                docstring: extract_python_docstring(node, source),
                 signature: None,
                 imports: Vec::new(),
                 exports: Vec::new(),
@@ -1026,6 +1088,12 @@ def fetch(url, timeout=30):
         let f = find(&symbols, "fetch");
         assert_eq!(f.kind, "function");
 
+        // This test was named for the docstring and never asserted one,
+        // which is how `extract_docstring` — a JSDoc scanner that looks
+        // *above* the node — sat on the Python path returning `None` for
+        // every symbol in every Python repo ever indexed.
+        assert_eq!(f.docstring.as_deref(), Some("Fetch a URL."));
+
         let sig = f.signature.as_ref().expect("signature");
         let names: Vec<&str> = sig.params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["url", "timeout"]);
@@ -1039,6 +1107,68 @@ def fetch(url, timeout=30):
         assert_eq!(m.params, 2);
         assert_eq!(m.max_nesting, 2, "a for inside an if is depth 2");
         assert!(m.loc > 0);
+    }
+
+    /// Python documents *inside* the body, and in four quoting styles.
+    ///
+    /// Only the first statement counts — a bare string later in a body is
+    /// an expression, not documentation — and a class docstring has to work
+    /// too, or `doc_coverage` reports every Python class undocumented.
+    #[test]
+    fn a_docstring_is_the_first_string_in_the_body_whatever_its_quotes() {
+        let (symbols, _) = parse(
+            r#"
+def triple(a):
+    """First line.
+
+    Second line.
+    """
+    return a
+
+def single(a):
+    'one line'
+    return a
+
+def raw(a):
+    r"""Raw \d+ pattern."""
+    return a
+
+def not_a_doc(a):
+    x = 1
+    "this is just an expression"
+    return x
+
+class Thing:
+    """What the class is for."""
+    def method(self):
+        """What the method does."""
+        return 1
+"#,
+        );
+        assert_eq!(
+            find(&symbols, "triple").docstring.as_deref(),
+            Some("First line.\nSecond line."),
+            "blank lines dropped and source indentation stripped, so \
+             annotate_line_metrics counts what it counts for every other language"
+        );
+        assert_eq!(find(&symbols, "single").docstring.as_deref(), Some("one line"));
+        assert_eq!(
+            find(&symbols, "raw").docstring.as_deref(),
+            Some("Raw \\d+ pattern."),
+            "the r prefix is not part of the text"
+        );
+        assert_eq!(
+            find(&symbols, "not_a_doc").docstring, None,
+            "a string that is not the first statement is an expression"
+        );
+        assert_eq!(
+            find(&symbols, "Thing").docstring.as_deref(),
+            Some("What the class is for.")
+        );
+        assert_eq!(
+            find(&symbols, "Thing.method").docstring.as_deref(),
+            Some("What the method does.")
+        );
     }
 
     #[test]

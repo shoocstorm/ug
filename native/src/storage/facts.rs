@@ -57,11 +57,21 @@ pub struct FactContext<'a> {
     out_degree: HashMap<&'a str, u32>,
     /// Outbound `Contains` edges from a type to the members it declares.
     ///
-    /// The one place `Contains` is the signal rather than the noise. Only
-    /// meaningful for languages whose class body encloses its members —
-    /// Java has 451 such edges in the bundled sample; Rust has none,
-    /// because `impl` blocks sit outside the struct they extend. See
-    /// [`compute`] for how that asymmetry is kept honest.
+    /// The one place `Contains` is the signal rather than the noise.
+    ///
+    /// **Rust is included, contrary to what this said for a long time.**
+    /// The claim was that `impl` blocks sit outside the struct so Rust
+    /// types get no `Contains` edges and no `members` — repeated in the
+    /// `classes_by_members` preset description and in `docs/ANALYZE.md`,
+    /// which together told callers to disregard a working answer. The
+    /// graph builder attaches an `impl` block's methods to the type
+    /// (`Db` -[Contains]-> `Db::open`), so 107 of this repo's 311 Rust
+    /// types carry a count.
+    ///
+    /// What is genuinely absent is a type nobody wrote an `impl` for — a
+    /// plain data struct like `GraphNode`, or a request body. That is a
+    /// real zero about a real thing, and it is still recorded as *absent*
+    /// rather than `0` so the two cannot be confused. See [`compute`].
     members: HashMap<&'a str, u32>,
     /// How many times each *short* symbol name is mentioned by some other
     /// node, keyed by that name.
@@ -581,11 +591,11 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
         );
     }
 
-    // Members are only recorded where the graph genuinely has them. A
-    // Rust struct's methods live in a separate `impl` block, so it has no
-    // `Contains` edges and gets no `members` fact — absent rather than a
-    // zero that would rank every Rust type as memberless. The coverage
-    // line makes the partial population visible.
+    // Absent rather than zero where the graph has no members for a type:
+    // a plain data struct with no `impl` and a class whose body the
+    // extractor could not read are different situations, and a stored `0`
+    // would make them identical. The coverage line reports the partial
+    // population.
     if matches!(n.node_type, GraphNodeType::Class | GraphNodeType::Interface) {
         if let Some(count) = ctx.members.get(n.id.as_str()).copied().filter(|c| *c > 0) {
             f.insert("members".into(), FactValue::Int(count as i64));
@@ -1386,7 +1396,7 @@ mod tests {
     /// no `Contains` edges. Reporting `members: 0` would rank every Rust
     /// type as memberless against Java types that genuinely nest theirs.
     #[test]
-    fn members_is_absent_rather_than_zero_when_the_language_does_not_nest() {
+    fn members_is_absent_rather_than_zero_when_a_type_declares_none() {
         let mut n = node("class:src/a.rs:S", Some("src/a.rs"));
         n.node_type = GraphNodeType::Class;
         let f = compute(&n, &ctx_of(vec![]));
