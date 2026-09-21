@@ -495,6 +495,56 @@ pub fn base_type_name(written: &str) -> &str {
     s
 }
 
+/// Every type named inside a written type expression, outermost first.
+///
+/// [`base_type_name`] answers "what *is* this type" and stops at the first
+/// `<`. This answers "what types does this expression mention", which is a
+/// different question and the one a `References` edge is drawn from:
+/// `Json<SearchArgs>` names two types, and the one that matters — the
+/// payload the handler actually deserialises — is the one inside the
+/// brackets. Reading only the outer name is why every `serde` DTO in this
+/// repository had an in-degree of zero.
+///
+/// Tokens are kept whole, path and all (`crate::types::GraphData`), so the
+/// caller can hand them to [`ImportScope::resolve_path`]; a token is kept
+/// when its **last segment** looks like a type, which drops lifetimes,
+/// primitives, `dyn`/`impl`/`mut`, and the lowercase module prefixes that
+/// are already carried inside the paths they qualify.
+pub fn type_idents(written: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let is_tok = |c: char| c.is_alphanumeric() || c == '_' || c == ':';
+    let mut run: Option<usize> = None;
+    for (i, c) in written.char_indices() {
+        match (is_tok(c), run) {
+            (true, None) => run = Some(i),
+            (false, Some(start)) => {
+                keep_type_token(&written[start..i], &mut out);
+                run = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(start) = run {
+        keep_type_token(&written[start..], &mut out);
+    }
+    out
+}
+
+/// Keep one token from [`type_idents`] if its last path segment names a type.
+fn keep_type_token<'a>(tok: &'a str, out: &mut Vec<&'a str>) {
+    let tok = tok.trim_matches(':');
+    if tok.is_empty() {
+        return;
+    }
+    let last = tok.rsplit("::").next().unwrap_or(tok);
+    if !looks_like_type(last) {
+        return;
+    }
+    if !out.contains(&tok) {
+        out.push(tok);
+    }
+}
+
 /// Whether an identifier looks like a declared constant.
 ///
 /// `SCREAMING_SNAKE_CASE` is the constant convention in Rust, TypeScript and

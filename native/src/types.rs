@@ -358,6 +358,38 @@ pub struct FileNode {
     /// in [`crate::graph::build`].
     #[serde(default, rename = "dispatchBindings", skip_serializing_if = "Vec::is_empty")]
     pub dispatch_bindings: Vec<DispatchBinding>,
+
+    /// Calls and references written at module scope, outside any symbol.
+    ///
+    /// File-level because that is whose code it is. A browser bundle does
+    /// its whole wiring here — `wirePalette();`, `wireUrlState();`, a
+    /// keydown listener that calls `gotoTour()` — and none of it sits
+    /// inside a function, so there was no symbol to hang the call on and
+    /// every one of those call sites was dropped. Nineteen functions in
+    /// this repo's vis layer read as dead for that reason alone.
+    ///
+    /// Resolved in [`crate::graph::build`] to edges out of the *File*
+    /// node, which is exactly what module-scope code is.
+    #[serde(default, rename = "moduleRefs", skip_serializing_if = "ModuleRefs::is_empty")]
+    pub module_refs: ModuleRefs,
+}
+
+/// Calls and references made at a file's module scope, outside any symbol.
+/// See [`FileNode::module_refs`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModuleRefs {
+    /// Bare callee names, for languages that report only those.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<String>,
+    /// Functions named as values — the listener and handler wiring.
+    #[serde(rename = "valueRefs", default, skip_serializing_if = "Vec::is_empty")]
+    pub value_refs: Vec<String>,
+}
+
+impl ModuleRefs {
+    pub fn is_empty(&self) -> bool {
+        self.calls.is_empty() && self.value_refs.is_empty()
+    }
 }
 
 /// One row of a dispatch table: an externally-visible surface and the

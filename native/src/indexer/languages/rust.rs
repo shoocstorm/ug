@@ -532,8 +532,10 @@ fn extract_symbol_from_node(
 
             let params = extract_params(node, source);
             let return_type = extract_return_type(node, source);
-            let (calls, call_refs, uses, value_refs) =
+            let (calls, call_refs, uses, mut value_refs) =
                 extract_calls(node, source, ctx, imp, &params);
+            record_attr_fn_refs(&annotations, ctx, &mut value_refs);
+            let type_refs = signature_type_refs(&params, return_type.as_deref(), ctx);
             let metrics = SymbolMetrics {
                 // Inclusive of both the first and last line, matching the
                 // span fallback used for symbols that carry no metrics.
@@ -568,6 +570,7 @@ fn extract_symbol_from_node(
                 call_refs,
                 uses,
                 value_refs,
+                type_refs,
                 qualified_name,
                 owner: imp.map(|i| i.fqn.clone()),
                 metrics: Some(metrics),
@@ -579,6 +582,12 @@ fn extract_symbol_from_node(
                 return;
             };
             let item_kind = if kind == "struct_item" { "struct" } else { "enum" };
+            // A data type's dependencies are its fields. Nothing else in
+            // the pipeline looks at them, which is why a struct that only
+            // ever appears as somebody's field or payload read as dead.
+            let mut value_refs = Vec::new();
+            let type_refs = body_type_refs(node, source, ctx, &mut value_refs);
+            record_attr_fn_refs(&annotations, ctx, &mut value_refs);
             out.push(Symbol {
                 annotations: annotations.clone(),
                 id: format!("{}:{}:{}", item_kind, start, name),
@@ -595,6 +604,8 @@ fn extract_symbol_from_node(
                 extends: Vec::new(),
                 implements: Vec::new(),
                 calls: Vec::new(),
+                type_refs,
+                value_refs,
                 metrics: None,
                 ..Default::default()
             });
@@ -635,6 +646,13 @@ fn extract_symbol_from_node(
             let Some(name) = get_node_text(node.child_by_field_name("name"), source) else {
                 return;
             };
+            let type_refs = declared_type(node, source)
+                .map(|t| {
+                    let mut v = Vec::new();
+                    record_type_refs(&t, ctx, &mut v);
+                    v
+                })
+                .unwrap_or_default();
             out.push(Symbol {
                 annotations: annotations.clone(),
                 id: format!("type:{}:{}", start, name),
@@ -651,6 +669,7 @@ fn extract_symbol_from_node(
                 extends: Vec::new(),
                 implements: Vec::new(),
                 calls: Vec::new(),
+                type_refs,
                 metrics: None,
                 ..Default::default()
             });
@@ -659,10 +678,39 @@ fn extract_symbol_from_node(
             let Some(name) = get_node_text(node.child_by_field_name("name"), source) else {
                 return;
             };
+            // A `const` names a type and, through its initialiser, other
+            // constants — `BUILTIN` is a table of `Preset` rows whose
+            // `params` fields are the `NO_PARAMS` / `MIN_LOC` constants
+            // beside it. Neither was visible: `record_constant_use` only
+            // ever walked function bodies.
+            let mut type_refs = Vec::new();
+            if let Some(t) = declared_type(node, source) {
+                record_type_refs(&t, ctx, &mut type_refs);
+            }
+            let mut uses = Vec::new();
+            let mut value_refs = Vec::new();
+            if let Some(value) = node.child_by_field_name("value") {
+                collect_initializer_refs(&value, source, ctx, &mut uses, &mut type_refs);
+            }
+            record_attr_fn_refs(&annotations, ctx, &mut value_refs);
+            // An associated constant is written `GraphNodeType::ALL` at
+            // every call site, so that is the name it has to be registered
+            // under. Qualifying it with the module alone produced
+            // `crate::types::ALL`, which shares no path suffix with the
+            // spelling anyone uses — and left both of this repo's `ALL`
+            // constants looking unread while also making them
+            // indistinguishable from each other.
+            //
+            // `name` keeps its bare display spelling, so node ids are
+            // unchanged.
+            let qualified_name = Some(match imp {
+                Some(i) => format!("{}::{}", i.fqn, name),
+                None => ctx.scope.qualify(&name),
+            });
             out.push(Symbol {
                 annotations: annotations.clone(),
                 id: format!("const:{}:{}", start, name),
-                qualified_name: Some(ctx.scope.qualify(&name)),
+                qualified_name,
                 name,
                 kind: "constant".to_string(),
                 file: String::new(),
@@ -675,6 +723,9 @@ fn extract_symbol_from_node(
                 extends: Vec::new(),
                 implements: Vec::new(),
                 calls: Vec::new(),
+                uses,
+                type_refs,
+                value_refs,
                 metrics: None,
                 ..Default::default()
             });
@@ -742,6 +793,209 @@ fn attach_impl_traits(symbols: &mut [Symbol], impl_traits: &[(String, String)]) 
 /// Collected in one pre-pass because a method body typing `self.store` needs
 /// the declaration of `store`, which sits in a `struct_item` the walk may not
 /// have reached yet.
+/// Resolve every type named in `written` against this file's imports and
+/// add it to `out`.
+///
+/// Both spellings are offered for the same reason `record_value_refs` offers
+/// both: `resolve_path` re-roots an unbound name under the current module,
+/// which is right for a type declared here and wrong for one arriving
+/// through `use module::*`. The symbol table discards whichever candidate
+/// names nothing.
+fn record_type_refs(written: &str, ctx: &Ctx, out: &mut Vec<String>) {
+    for tok in crate::indexer::scope::type_idents(written) {
+        let tail = tok.rsplit("::").next().unwrap_or(tok);
+        let mut candidates = Vec::new();
+        candidates.extend(ctx.scope.resolve_path(tok));
+        candidates.extend(ctx.scope.glob_candidates(tail));
+        for candidate in candidates {
+            if !out.contains(&candidate) {
+                out.push(candidate);
+            }
+        }
+    }
+}
+
+/// Constants and types named inside a `const`/`static` initialiser.
+///
+/// `record_constant_use` runs from `collect_calls`, which is only ever
+/// handed a *function body*. A module-level table — `static BUILTIN: &[Preset]`
+/// whose rows carry `params: NO_PARAMS` and `category: Category::DeadCode` —
+/// is not a function body, so every constant and type it names went
+/// unrecorded, and seven of this repo's preset-parameter constants read as
+/// dead because their only reader was another constant.
+fn collect_initializer_refs(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    uses: &mut Vec<String>,
+    type_refs: &mut Vec<String>,
+) {
+    record_constant_use(node, source, ctx, uses);
+    // A struct literal or an enum path inside the table names its type.
+    if matches!(node.kind(), "struct_expression" | "scoped_identifier" | "type_identifier") {
+        let text = match node.kind() {
+            "struct_expression" => get_node_text(node.child_by_field_name("name"), source),
+            _ => get_node_text(Some(*node), source),
+        };
+        if let Some(t) = text {
+            record_type_refs(&t, ctx, type_refs);
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_initializer_refs(&child, source, ctx, uses, type_refs);
+    }
+}
+
+/// The type a `const`/`static`/`let` declaration or a type alias names, as
+/// written. Tree-sitter gives all of them a `type` field.
+fn declared_type(node: &Node, source: &[u8]) -> Option<String> {
+    get_node_text(node.child_by_field_name("type"), source)
+}
+
+/// Types named in this item's own declaration: a function's parameters and
+/// return type, or the fields of the struct/enum body below it.
+fn signature_type_refs(params: &[Param], return_type: Option<&str>, ctx: &Ctx) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in params {
+        if let Some(t) = &p.param_type {
+            record_type_refs(t, ctx, &mut out);
+        }
+    }
+    if let Some(r) = return_type {
+        record_type_refs(r, ctx, &mut out);
+    }
+    out
+}
+
+/// Every type named by a field of this struct, or by an enum variant's
+/// payload.
+///
+/// Walks the item's own body only — `walk_struct_fields` recurses to find
+/// nested items, which would attribute an inner struct's fields to its
+/// outer one.
+fn body_type_refs(node: &Node, source: &[u8], ctx: &Ctx, value_refs: &mut Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(body) = node.child_by_field_name("body") else {
+        return out;
+    };
+    let mut cursor = body.walk();
+    for child in body.children(&mut cursor) {
+        match child.kind() {
+            "field_declaration" => {
+                if let Some(t) = get_node_text(child.child_by_field_name("type"), source) {
+                    record_type_refs(&t, ctx, &mut out);
+                }
+                // `#[serde(default = "default_hybrid_k")]` sits on the
+                // *field*, not on the struct, so reading only the item's
+                // own attributes missed every one of them.
+                record_attr_fn_refs(&extract_attributes(&child, source), ctx, value_refs);
+            }
+            // `enum E { V(Payload), W { f: T } }` — the variant's own body
+            // is another field list, or a tuple of bare types.
+            "enum_variant" => {
+                let mut vc = child.walk();
+                for part in child.children(&mut vc) {
+                    if !matches!(part.kind(), "field_declaration_list" | "ordered_field_declaration_list") {
+                        continue;
+                    }
+                    let mut fc = part.walk();
+                    for f in part.children(&mut fc) {
+                        let text = match f.kind() {
+                            "field_declaration" => get_node_text(f.child_by_field_name("type"), source),
+                            "type_identifier" | "generic_type" | "scoped_type_identifier"
+                            | "reference_type" => get_node_text(Some(f), source),
+                            _ => None,
+                        };
+                        if let Some(t) = text {
+                            record_type_refs(&t, ctx, &mut out);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Attribute arguments that name a function by string literal.
+///
+/// `serde` wires whole code paths this way — `#[serde(default =
+/// "default_hybrid_k")]`, `deserialize_with = "de_edges_interned"` — and a
+/// function named only in a string is invisible to every other pass: it is
+/// not called, not passed as a value, and not a type. Eight of this repo's
+/// `default_*` helpers read as dead for exactly that reason.
+const FN_VALUED_ATTR_KEYS: &[&str] = &[
+    "default",
+    "with",
+    "serialize_with",
+    "deserialize_with",
+    "skip_serializing_if",
+    "getter",
+    "into",
+    "try_from",
+];
+
+/// Pull `key = "some::path"` pairs out of an attribute's argument text and
+/// record the paths as value references.
+fn record_attr_fn_refs(annotations: &[Annotation], ctx: &Ctx, out: &mut Vec<String>) {
+    for ann in annotations {
+        let Some(args) = &ann.args else { continue };
+        for (key, value) in attr_key_values(args) {
+            if !FN_VALUED_ATTR_KEYS.contains(&key) {
+                continue;
+            }
+            // A path, not a bare name: `resolve_path` re-roots a bare name
+            // under this module, which is exactly right — these helpers are
+            // conventionally declared beside the type that names them.
+            let tail = value.rsplit("::").next().unwrap_or(value);
+            let mut candidates = Vec::new();
+            candidates.extend(ctx.scope.resolve_path(value));
+            candidates.extend(ctx.scope.glob_candidates(tail));
+            for candidate in candidates {
+                if !out.contains(&candidate) {
+                    out.push(candidate);
+                }
+            }
+        }
+    }
+}
+
+/// `key = "value"` pairs inside raw attribute argument text.
+///
+/// Deliberately a scan rather than a parse: attribute arguments are nested
+/// and comma-separated (`serde(rename_all = "camelCase", default = "f")`),
+/// and every form that matters here is a quoted string to the right of an
+/// `=`.
+fn attr_key_values(args: &str) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    let bytes = args.as_bytes();
+    let mut i = 0;
+    while let Some(eq) = args[i..].find('=') {
+        let eq = i + eq;
+        let key_end = args[..eq].trim_end().len();
+        let key_start = args[..key_end]
+            .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        let key = &args[key_start..key_end];
+
+        let rest = &args[eq + 1..];
+        let Some(open) = rest.find('"') else { break };
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('"') else { break };
+        if !key.is_empty() {
+            out.push((key, &after[..close]));
+        }
+        i = eq + 1 + open + 1 + close + 1;
+        if i >= bytes.len() {
+            break;
+        }
+    }
+    out
+}
+
 fn collect_struct_fields(
     root: Node,
     source: &[u8],
@@ -847,6 +1101,21 @@ fn collect_calls(
     for child in node.children(&mut cursor) {
         record_constant_use(&child, source, ctx, &mut sink.uses);
         match child.kind() {
+            // A type named anywhere in a body — a local's annotation, a
+            // turbofish, a `static FOO: java::JavaIndexer` declared inside
+            // a function — is a dependency on it. Only the item-level
+            // declarations were read before, so the five language indexers
+            // in `languages::for_extension`, which are `static`s inside a
+            // function, had nothing pointing at them.
+            //
+            // Into `value_refs` rather than a list of its own: both mean
+            // "names this symbol without calling it", and both resolve to
+            // the same `References` edge.
+            "type_identifier" | "scoped_type_identifier" => {
+                if let Some(t) = get_node_text(Some(child), source) {
+                    record_type_refs(&t, ctx, &mut sink.value_refs);
+                }
+            }
             // Locals are recorded as they are met, so a binding halfway down
             // a body types the calls below it. No block scoping — see
             // `TypeEnv`.
@@ -882,6 +1151,7 @@ fn collect_calls(
                 }
             }
             "macro_invocation" => {
+                collect_macro_refs(&child, source, ctx, sink);
                 if let Some(name) = get_node_text(child.child_by_field_name("macro"), source) {
                     let bare = name.rsplit("::").next().unwrap_or(&name).to_string();
                     push_call(&mut sink.calls, &bare);
@@ -901,6 +1171,241 @@ fn collect_calls(
             _ => {}
         }
         collect_calls(&child, source, ctx, imp, env, sink);
+    }
+}
+
+/// Calls and value references written inside a macro's argument list.
+///
+/// A macro's arguments are not code to tree-sitter — they are a
+/// `token_tree` of loose tokens, so `println!("{}", fmt_thousands(n))`
+/// contains no `call_expression` and the call to `fmt_thousands` was simply
+/// not there. In a codebase that prints, formats and asserts, that is not an
+/// edge case: `format!`, `println!`, `write!`, `vec!` and `assert_eq!`
+/// swallowed the only call site of thirty-odd functions here, every one of
+/// which then read as dead code.
+///
+/// The token stream is walked against the source text rather than the tree,
+/// because `::` does not survive as a child node: an identifier followed by
+/// `(` is a call, an identifier preceded by `.` is a method call on a
+/// receiver this pass cannot type, and anything else that looks like a type
+/// is a value — `vec![Box::new(RustIndexer)]` names a unit struct.
+fn collect_macro_refs(mac: &Node, source: &[u8], ctx: &Ctx, sink: &mut CallSink) {
+    // The token tree carries no field name in this grammar — it is simply
+    // the child after the `!`.
+    let mut cursor = mac.walk();
+    for child in mac.children(&mut cursor) {
+        if child.kind() == "token_tree" {
+            walk_macro_tokens(&child, source, ctx, sink);
+        }
+    }
+}
+
+fn walk_macro_tokens(node: &Node, source: &[u8], ctx: &Ctx, sink: &mut CallSink) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            // A format string is prose except inside its `{…}`
+            // placeholders, which since Rust 2021 capture identifiers from
+            // the enclosing scope: `format!("{UPGRADE_REPO}/releases")` and
+            // `println!("{:<CMD_W$}", x)` are the *only* reads of those two
+            // constants in this repo, and mining the literal as prose would
+            // have found every other word in it instead.
+            "string_literal" | "raw_string_literal" => {
+                record_format_captures(&child, source, ctx, sink);
+            }
+            "char_literal" | "line_comment" | "block_comment" => continue,
+            "identifier" | "scoped_identifier" => {
+                macro_token_ref(&child, source, ctx, sink);
+            }
+            "token_tree" => walk_macro_tokens(&child, source, ctx, sink),
+            _ => walk_macro_tokens(&child, source, ctx, sink),
+        }
+    }
+}
+
+/// Constants captured by name inside a format string's `{…}` placeholders.
+///
+/// The grammar covered: `{name}`, `{name:spec}` and the `width$` /
+/// `precision$` forms (`{:<CMD_W$}`), which is where a layout constant
+/// hides. `{}` and `{0}` capture nothing. `{{` is an escaped brace, not a
+/// placeholder.
+///
+/// Only constants are recorded. A placeholder far more often names a local
+/// (`{path}`, `{name}`, `{err}`) than anything module-level, and recording
+/// those would draw an edge from a format string to whatever function in
+/// the repo happens to share the name — the precise failure `looks_like_constant`
+/// exists to prevent elsewhere.
+fn record_format_captures(lit: &Node, source: &[u8], ctx: &Ctx, sink: &mut CallSink) {
+    let Some(text) = get_node_text(Some(*lit), source) else {
+        return;
+    };
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'{' {
+            i += 1;
+            continue;
+        }
+        if bytes.get(i + 1) == Some(&b'{') {
+            i += 2;
+            continue;
+        }
+        let Some(close) = text[i + 1..].find('}') else { break };
+        let inner = &text[i + 1..i + 1 + close];
+        for name in placeholder_idents(inner) {
+            if !crate::indexer::scope::looks_like_constant(name) {
+                continue;
+            }
+            if let Some(fqn) = ctx.scope.resolve_path(name) {
+                if !sink.uses.contains(&fqn) {
+                    sink.uses.push(fqn);
+                }
+            }
+        }
+        i += close + 2;
+    }
+}
+
+/// Identifiers a single `{…}` placeholder body captures: the argument name
+/// before any `:`, and any `width$` / `precision$` name inside the spec.
+fn placeholder_idents(inner: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (arg, spec) = match inner.split_once(':') {
+        Some((a, s)) => (a, Some(s)),
+        None => (inner, None),
+    };
+    let arg = arg.trim();
+    if !arg.is_empty() && arg.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        out.push(arg);
+    }
+    if let Some(spec) = spec {
+        let b = spec.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] != b'$' {
+                i += 1;
+                continue;
+            }
+            let start = spec[..i]
+                .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .map(|p| p + 1)
+                .unwrap_or(0);
+            if start < i {
+                out.push(&spec[start..i]);
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Classify one identifier inside a macro's token stream.
+fn macro_token_ref(id: &Node, source: &[u8], ctx: &Ctx, sink: &mut CallSink) {
+    let Some(name) = get_node_text(Some(*id), source) else {
+        return;
+    };
+    // Byte scans, not `str` conversions: this runs once per identifier in
+    // every macro in the file, and re-validating the whole file as UTF-8
+    // each time would make indexing quadratic in file size. Every character
+    // being tested for (`.`, `:`, `(`, whitespace) is ASCII, so a byte
+    // comparison is exact.
+    let start = id.start_byte();
+    let end = id.end_byte();
+    let skip_ws_back = |mut i: usize| {
+        while i > 0 && source[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        i
+    };
+    let skip_ws_fwd = |mut i: usize| {
+        while i < source.len() && source[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    };
+
+    let b = skip_ws_back(start);
+    // A continuation of a `::` path: `new` in `Box::new`. The head segment
+    // already claimed the whole path.
+    if b >= 2 && &source[b - 2..b] == b"::" {
+        return;
+    }
+    // `a.foo(..)` — a method on a receiver nothing here can type. The
+    // bare-name fallback is exactly the guesswork `CallRef::has_receiver`
+    // exists to suppress, so this is dropped rather than guessed.
+    if b >= 1 && source[b - 1] == b'.' {
+        return;
+    }
+
+    // Gather the rest of a `::` path written after this identifier.
+    let mut path_end = end;
+    loop {
+        let sep = skip_ws_fwd(path_end);
+        if sep + 2 > source.len() || &source[sep..sep + 2] != b"::" {
+            break;
+        }
+        let seg_start = skip_ws_fwd(sep + 2);
+        let mut seg_end = seg_start;
+        while seg_end < source.len()
+            && (source[seg_end].is_ascii_alphanumeric() || source[seg_end] == b'_')
+        {
+            seg_end += 1;
+        }
+        if seg_end == seg_start {
+            break;
+        }
+        path_end = seg_end;
+    }
+    let Ok(path) = std::str::from_utf8(&source[start..path_end]) else {
+        return;
+    };
+
+    let after_path = skip_ws_fwd(path_end);
+    if source.get(after_path) == Some(&b'(') {
+        let tail = path.rsplit("::").next().unwrap_or(path);
+        push_call(&mut sink.calls, tail);
+        sink.refs.push(CallRef {
+            qualified: ctx.scope.resolve_path(path),
+            name: tail.to_string(),
+            owner_type: None,
+            argc: 0,
+            first_string_arg: None,
+            is_ctor: false,
+            // A qualified path has had its one honest chance through
+            // `qualified`; only a bare name may fall back to the symbol
+            // table.
+            has_receiver: path.contains("::"),
+        });
+        return;
+    }
+
+    // Not a call. `record_constant_use` also sees this node, but inside a
+    // token tree it sees the *bare* identifier: `::` leaves no child node,
+    // so `ultragraph::analyze::QUERYABLE_PROPERTIES` arrives as three
+    // separate identifiers and the constant gets re-rooted under the
+    // reading module. The path reconstructed above is the spelling that
+    // resolves.
+    let tail = path.rsplit("::").next().unwrap_or(path);
+    if path.contains("::") && crate::indexer::scope::looks_like_constant(tail) {
+        if let Some(fqn) = ctx.scope.resolve_path(path) {
+            if !sink.uses.contains(&fqn) {
+                sink.uses.push(fqn);
+            }
+        }
+        return;
+    }
+
+    // A type written as a value is a unit struct or an enum variant being
+    // passed somewhere, which is a reference to it.
+    if crate::indexer::scope::looks_like_type(&name) {
+        let mut candidates = Vec::new();
+        candidates.extend(ctx.scope.resolve_path(path));
+        candidates.extend(ctx.scope.glob_candidates(tail));
+        for candidate in candidates {
+            if !sink.value_refs.contains(&candidate) {
+                sink.value_refs.push(candidate);
+            }
+        }
     }
 }
 
@@ -971,9 +1476,18 @@ fn record_constant_use(node: &Node, source: &[u8], ctx: &Ctx, uses: &mut Vec<Str
     if !looks_like_constant(tail) {
         return;
     }
-    if let Some(fqn) = ctx.scope.resolve_path(&text) {
-        if !uses.contains(&fqn) {
-            uses.push(fqn);
+    // Both spellings, for the reason `record_value_refs` spells out: a
+    // glob import (`use super::*`) leaves `resolve_path` nothing to
+    // compose, so it re-roots the name under *this* module — right for a
+    // constant declared here, wrong for one arriving through the glob.
+    // Offering both lets the symbol table decide. Without it, every
+    // constant reached through a glob import read as unused.
+    let mut candidates = Vec::new();
+    candidates.extend(ctx.scope.resolve_path(&text));
+    candidates.extend(ctx.scope.glob_candidates(tail));
+    for candidate in candidates {
+        if !uses.contains(&candidate) {
+            uses.push(candidate);
         }
     }
 }
@@ -1655,3 +2169,4 @@ mod parser_tests {
         );
     }
 }
+

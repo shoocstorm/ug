@@ -933,3 +933,255 @@ fn a_local_binding_does_not_reference_a_same_named_symbol_elsewhere() {
         targets(&graph, "resolve_edges", GraphEdgeType::References)
     );
 }
+
+// ─── What a call site can be written as ─────────────────────────────────
+//
+// Every case below was a call or a reference that a human reads as obvious
+// and the indexer could not see at all. They are grouped here because they
+// share a failure mode: the name is written down in a position the AST walk
+// never visited, so the symbol had no inbound edge and `dead_code` reported
+// it. Thirty-odd functions, structs and constants in this repo were on that
+// list for one of these five reasons.
+
+/// A macro's arguments are a `token_tree` of loose tokens, not code: there
+/// is no `call_expression` inside `println!("{}", fmt(n))`, so the call to
+/// `fmt` simply was not in the tree. In a codebase that prints, formats and
+/// asserts, that hid the *only* call site of a great many helpers.
+#[test]
+fn rust_a_call_inside_a_macro_is_still_a_call() {
+    let graph = run(&[(
+        "src/main.rs",
+        r#"
+fn render(n: usize) -> String { format!("{}", n) }
+fn unrelated() -> usize { 1 }
+pub fn show(n: usize) {
+    println!("{}", render(n));
+}
+"#,
+    )]);
+
+    let called = targets(&graph, "show", GraphEdgeType::Calls);
+    assert!(called.contains("render"), "got {called:?}");
+    // The bare-name fallback must not reach for a function the macro never
+    // named just because it is in the same file.
+    assert!(!called.contains("unrelated"), "got {called:?}");
+}
+
+/// A method call inside a macro still has a receiver nothing here can type,
+/// and guessing its name against the symbol table is the exact failure the
+/// non-macro path already refuses. `.render()` must not reach `render`.
+#[test]
+fn rust_a_method_call_inside_a_macro_is_not_guessed_by_name() {
+    let graph = run(&[(
+        "src/main.rs",
+        r#"
+fn render(n: usize) -> String { format!("{}", n) }
+pub fn show(w: Widget) {
+    println!("{}", w.render());
+}
+"#,
+    )]);
+
+    let called = targets(&graph, "show", GraphEdgeType::Calls);
+    assert!(!called.contains("render"), "got {called:?}");
+}
+
+/// Since Rust 2021 a format string captures identifiers from the enclosing
+/// scope, so `format!("{WIDTH}")` is a read of `WIDTH` and the only one it
+/// may ever get. Mining the literal as prose instead would have found every
+/// other word in the string.
+#[test]
+fn rust_a_constant_captured_by_a_format_string_is_a_use() {
+    let graph = run(&[(
+        "src/main.rs",
+        r#"
+const WIDTH: usize = 18;
+const PAD: usize = 4;
+pub fn banner(name: &str) {
+    println!("{name:<WIDTH$}");
+    println!("{PAD}");
+}
+"#,
+    )]);
+
+    let used = targets(&graph, "banner", GraphEdgeType::Uses);
+    assert!(used.contains("WIDTH"), "width$ capture: got {used:?}");
+    assert!(used.contains("PAD"), "bare capture: got {used:?}");
+}
+
+/// A data type is never called. It is a parameter, a return, a field — and
+/// until the indexer read type positions, every `serde` payload and params
+/// struct in a codebase had an in-degree of zero and read as dead.
+#[test]
+fn rust_a_type_named_only_in_a_signature_is_referenced() {
+    let graph = run(&[
+        (
+            "src/dto.rs",
+            "pub struct Body { pub n: u32 }\npub struct Reply { pub ok: bool }\npub struct Unused { pub x: u32 }\n",
+        ),
+        (
+            "src/api.rs",
+            "use crate::dto::{Body, Reply};\npub fn handle(b: Json<Body>) -> Reply { todo!() }\n",
+        ),
+    ]);
+
+    let refs = targets(&graph, "handle", GraphEdgeType::References);
+    // `Json<Body>` names two types and the payload is the one inside the
+    // brackets — reading only the outer name is what missed these.
+    assert!(refs.contains("Body"), "generic argument: got {refs:?}");
+    assert!(refs.contains("Reply"), "return type: got {refs:?}");
+    assert!(!refs.contains("Unused"), "got {refs:?}");
+}
+
+/// A struct's dependencies are its fields.
+#[test]
+fn rust_a_struct_references_the_types_of_its_fields() {
+    let graph = run(&[(
+        "src/types.rs",
+        "pub struct Inner { pub n: u32 }\npub struct Other { pub n: u32 }\npub struct Outer { pub inner: Vec<Inner> }\n",
+    )]);
+
+    let refs = targets(&graph, "Outer", GraphEdgeType::References);
+    assert!(refs.contains("Inner"), "got {refs:?}");
+    assert!(!refs.contains("Other"), "got {refs:?}");
+}
+
+/// `serde` wires whole code paths through string literals in attributes.
+/// A function named only there is not called, not passed as a value and not
+/// a type, so nothing else in the pipeline can see it.
+#[test]
+fn rust_a_function_named_in_a_serde_attribute_is_referenced() {
+    let graph = run(&[(
+        "src/body.rs",
+        r#"
+fn default_limit() -> u32 { 10 }
+fn never_named() -> u32 { 0 }
+pub struct Body {
+    #[serde(default = "default_limit")]
+    pub limit: u32,
+}
+"#,
+    )]);
+
+    let refs = targets(&graph, "Body", GraphEdgeType::References);
+    assert!(refs.contains("default_limit"), "got {refs:?}");
+    assert!(!refs.contains("never_named"), "got {refs:?}");
+}
+
+/// A constant reached through `use super::*` had its name re-rooted under
+/// the *reading* module, which matched nothing. Offering the glob's
+/// candidate too lets the symbol table decide.
+#[test]
+fn rust_a_constant_reached_through_a_glob_import_resolves() {
+    let graph = run(&[
+        ("src/limits.rs", "pub const MAX_ROWS: usize = 200;\n"),
+        (
+            "src/query.rs",
+            "use crate::limits::*;\npub fn cap(n: usize) -> usize { n.min(MAX_ROWS) }\n",
+        ),
+    ]);
+
+    let used = targets(&graph, "cap", GraphEdgeType::Uses);
+    assert!(used.contains("MAX_ROWS"), "got {used:?}");
+}
+
+/// Module-scope code belongs to the file, so its edges leave the File node.
+/// A browser bundle does its whole wiring there — `wirePalette();` at the
+/// end of a module, a handler handed to a command table — and none of it
+/// sits inside a function.
+#[test]
+fn js_module_level_wiring_is_attributed_to_the_file() {
+    let graph = run(&[(
+        "src/app.js",
+        r#"
+function wirePalette() { return 1; }
+function openContextTab() { return 2; }
+function neverWired() { return 3; }
+const commands = [{ name: 'Context', run: openContextTab }];
+wirePalette();
+"#,
+    )]);
+
+    let file = graph
+        .nodes
+        .iter()
+        .find(|n| n.id.starts_with("file:") && n.id.ends_with("app.js"))
+        .expect("file node");
+    let by_id: std::collections::HashMap<&str, &str> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.name.as_str()))
+        .collect();
+    let out: HashSet<String> = graph
+        .edges
+        .iter()
+        .filter(|e| {
+            &*e.source == file.id.as_str()
+                && matches!(e.edge_type, GraphEdgeType::Calls | GraphEdgeType::References)
+        })
+        .filter_map(|e| by_id.get(&*e.target).map(|s| s.to_string()))
+        .collect();
+
+    assert!(out.contains("wirePalette"), "top-level call: got {out:?}");
+    assert!(
+        out.contains("openContextTab"),
+        "value in a table: got {out:?}"
+    );
+    assert!(!out.contains("neverWired"), "got {out:?}");
+}
+
+/// An associated constant is written `Kind::ALL` everywhere it is read, so
+/// that is the name it has to be registered under. Qualifying it with the
+/// module alone produced `crate::types::ALL`, which shares no path suffix
+/// with the spelling anyone uses — and made two constants in different
+/// `impl` blocks indistinguishable from each other besides.
+#[test]
+fn rust_an_associated_constant_resolves_under_its_owner() {
+    let graph = run(&[
+        (
+            "src/kinds.rs",
+            r#"
+pub enum Kind { A }
+impl Kind { pub const ALL: &'static [Kind] = &[Kind::A]; }
+pub enum Other { B }
+impl Other { pub const ALL: &'static [Other] = &[Other::B]; }
+"#,
+        ),
+        (
+            "src/use_it.rs",
+            "use crate::kinds::Kind;\npub fn count() -> usize { Kind::ALL.len() }\n",
+        ),
+    ]);
+
+    let by_id: std::collections::HashMap<&str, &str> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.name.as_str()))
+        .collect();
+    let src = graph
+        .nodes
+        .iter()
+        .find(|n| n.name == "count")
+        .expect("count");
+    let used: Vec<(&str, &str)> = graph
+        .edges
+        .iter()
+        .filter(|e| &*e.source == src.id.as_str() && e.edge_type == GraphEdgeType::Uses)
+        .filter_map(|e| by_id.get(&*e.target).map(|n| (*n, &*e.target)))
+        .collect();
+
+    assert_eq!(used.len(), 1, "exactly one ALL, not both: got {used:?}");
+    assert_eq!(used[0].0, "ALL");
+    // And it is the one that belongs to `Kind`.
+    let target = graph
+        .nodes
+        .iter()
+        .find(|n| n.id == used[0].1)
+        .expect("target node");
+    assert_eq!(
+        target.qualified_name.as_deref(),
+        Some("crate::kinds::Kind::ALL"),
+        "got {:?}",
+        target.qualified_name
+    );
+}

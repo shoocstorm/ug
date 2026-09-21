@@ -57,6 +57,28 @@ impl LanguageIndexer for TypeScriptIndexer {
         visit(root, source, &walk, None, &mut symbols);
         symbols
     }
+
+    fn extract_module_refs(
+        &self,
+        source: &[u8],
+        root: Node,
+        ctx: &FileContext,
+    ) -> crate::types::ModuleRefs {
+        let scope = ImportScope::new(
+            "typescript",
+            module_path(ctx.path, "typescript"),
+            ctx.imports,
+        );
+        let walk = Ctx {
+            fields: collect_class_fields(root, source),
+            scope: &scope,
+        };
+        let mut env = TypeEnv::new();
+        let mut sink = CallSink::new();
+        collect_module_level_calls(&root, source, &walk, &mut env, &mut sink);
+        let (calls, _refs, _uses, value_refs) = sink.into_parts();
+        crate::types::ModuleRefs { calls, value_refs }
+    }
 }
 
 /// Everything the walk needs that the AST node itself doesn't carry.
@@ -742,6 +764,90 @@ fn extract_calls(
     sink.into_parts()
 }
 
+/// The kinds that become symbols of their own, and so own their bodies.
+///
+/// Module scope is what is left after these are taken out. Descending into
+/// a `function_declaration` here would re-attribute every call it makes to
+/// the file, doubling the graph's call edges and making every function's
+/// caller list wrong.
+fn declares_own_symbol(kind: &str) -> bool {
+    matches!(
+        kind,
+        "function_declaration"
+            | "method_definition"
+            | "method_signature"
+            | "class_declaration"
+            | "interface_declaration"
+            | "type_alias_declaration"
+    )
+}
+
+/// Calls and value references written at module scope — the file's own
+/// code, outside any function it declares.
+///
+/// This is where a browser bundle does its wiring. `wirePalette();` at the
+/// end of a module, a `keydown` listener whose handler calls `gotoTour()`,
+/// a command table holding `run: openContextTab` — all of it sits at top
+/// level, belonged to no symbol, and was therefore dropped on the floor.
+fn collect_module_level_calls(
+    node: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    env: &mut TypeEnv,
+    sink: &mut CallSink,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if declares_own_symbol(child.kind()) {
+            continue;
+        }
+        match child.kind() {
+            "variable_declarator" => record_local(&child, source, ctx, env),
+            "call_expression" => {
+                if let Some(r) = call_ref_for(&child, source, ctx, None, env) {
+                    push_call(&mut sink.calls, &r.name);
+                    sink.refs.push(r);
+                }
+                record_value_refs(&child, source, ctx, env, &mut sink.value_refs);
+            }
+            // An object literal in a table — `{ name: 'Context pack',
+            // run: openContextTab }` — hands a function to a registry
+            // without ever calling it, which is the same shape as a
+            // callback argument and the same reason it looked dead.
+            "pair" => record_pair_value_ref(&child, source, ctx, env, &mut sink.value_refs),
+            _ => {}
+        }
+        collect_module_level_calls(&child, source, ctx, env, sink);
+    }
+}
+
+/// A `key: someFunction` entry in an object literal.
+fn record_pair_value_ref(
+    pair: &Node,
+    source: &[u8],
+    ctx: &Ctx,
+    env: &TypeEnv,
+    value_refs: &mut Vec<String>,
+) {
+    let Some(value) = pair.child_by_field_name("value") else {
+        return;
+    };
+    if value.kind() != "identifier" {
+        return;
+    }
+    let Some(name) = get_node_text(Some(value), source) else {
+        return;
+    };
+    if env.contains_key(&name) || looks_like_constant(&name) {
+        return;
+    }
+    if let Some(fqn) = ctx.scope.resolve_path(&name) {
+        if !value_refs.contains(&fqn) {
+            value_refs.push(fqn);
+        }
+    }
+}
+
 fn collect_calls(
     node: &Node,
     source: &[u8],
@@ -778,6 +884,11 @@ fn collect_calls(
                 }
                 record_value_refs(&child, source, ctx, env, &mut sink.value_refs);
             }
+            // A registry table built inside a function — `{ name: 'Download
+            // graph', run: downloadGraph }` — hands a function somewhere
+            // without calling it. Same shape, and the same reason it read
+            // as dead, as a callback argument.
+            "pair" => record_pair_value_ref(&child, source, ctx, env, &mut sink.value_refs),
             _ => {}
         }
         collect_calls(&child, source, ctx, owner, env, sink);

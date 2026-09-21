@@ -165,6 +165,11 @@ fn process_file_content(
     boundary::annotate(indexer.name(), &mut symbols);
     let classification = classify_file(&path_str, &symbols);
 
+    // Before the `FileNode` literal takes ownership of `path_str` and
+    // `imports`, which `ctx` borrows.
+    let module_refs = indexer.extract_module_refs(source, root, &ctx);
+    drop(ctx);
+
     Some(FileNode {
         path: path_str,
         hash,
@@ -179,6 +184,7 @@ fn process_file_content(
         // placed once every file is in hand. Carried on the FileNode until
         // then.
         dispatch_bindings: indexer.extract_dispatch_bindings(source, root),
+        module_refs,
     })
 }
 

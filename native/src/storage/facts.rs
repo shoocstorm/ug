@@ -322,6 +322,35 @@ pub(crate) fn classification_str(c: &FileClassification) -> &'static str {
     }
 }
 
+/// Whether a node's text counts as somebody still using a name.
+///
+/// Code only. A markdown heading is indexed as a `Concept` whose docstring
+/// is the section body, and prose *about* the codebase is not a use of it —
+/// most sharply when the prose is a dead-code audit. Writing "this symbol
+/// is dead, nothing references it" into `docs/` puts that symbol's name in
+/// a `Concept` docstring, lifts its `name_mentions` to 1 and drops it out
+/// of `dead_code`: the act of recording the finding erases it. Every symbol
+/// on this repo's audit list vanished that way, on the commit that wrote
+/// the audit down.
+///
+/// The same trap bites in code, one name at a time: naming a dead symbol in
+/// a doc comment anywhere revives it. That is the intended behaviour —
+/// prose beside live code is evidence — but it means an example in a doc
+/// comment should never use a real symbol's name.
+///
+/// `File` and `Folder` are excluded for the duller reason that their names
+/// are paths.
+fn mentions_count_from(n: &GraphNode) -> bool {
+    matches!(
+        n.node_type,
+        GraphNodeType::Function
+            | GraphNodeType::Class
+            | GraphNodeType::Interface
+            | GraphNodeType::Constant
+            | GraphNodeType::Variable
+    )
+}
+
 /// True for the characters an identifier is made of, in every language the
 /// indexer reads. `$` earns its place for JS.
 fn is_ident_char(c: char) -> bool {

@@ -742,6 +742,34 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
     // in multiple files we prefer the one in the same file as the caller.
     for file in &index_result.files {
         let normalized_file_path = normalize_path(&file.path);
+
+        // Module-scope code belongs to the file, so its edges leave the
+        // File node. A browser bundle's whole wiring layer lives here —
+        // see `FileNode::module_refs`.
+        if !file.module_refs.is_empty() {
+            let file_node_id = format!("file:{normalized_file_path}");
+            let sep = crate::indexer::scope::module_sep(&file.language);
+            for called in &file.module_refs.calls {
+                if let Some(target_id) =
+                    resolve_symbol(symbol_id_map, called, &normalized_file_path)
+                {
+                    edges.add(&file_node_id, &target_id, GraphEdgeType::Calls);
+                    resolution.resolved_by_name += 1;
+                }
+            }
+            for referenced in &file.module_refs.value_refs {
+                if let Some(target_id) = qualified
+                    .by_qualified
+                    .get(referenced)
+                    .or_else(|| qualified.by_path_suffix(referenced, sep))
+                    .cloned()
+                {
+                    edges.add(&file_node_id, &target_id, GraphEdgeType::References);
+                    resolution.resolved_qualified += 1;
+                }
+            }
+        }
+
         // Recomputed rather than carried over from pass 1, but through the
         // same function — the two passes must agree on every id, and
         // `symbol_node_ids` is deterministic for a given `FileNode`.

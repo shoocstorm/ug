@@ -488,7 +488,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Twenty-one bugs this codebase keeps re-introducing
+## 9. Twenty-two bugs this codebase keeps re-introducing
 
 All are invisible in review and silent at runtime, and most have already
 shipped here more than once. Check for them by reflex.
@@ -1120,6 +1120,13 @@ a trait method reached through `dyn`, a handler passed as a value to
   `cargo check` cannot help — a `pub` item in a `pub mod` never warns, which is
   how two dead `pub async fn`s survived in `storage/db.rs`.
 
+- Before working around a zero in-degree, ask *why* the edge is missing. It
+  is usually a name written somewhere the AST walk never visited, and that is
+  fixable: reading macro token trees, inline format captures, type positions,
+  `serde` attribute strings, glob imports, module-scope code and associated
+  constants took `dead_code` from 462 rows to 24 on the same eight findings,
+  and added 3 300 edges the graph should always have had.
+
 Full audit and what still gets through: `docs/dev/DEAD-CODE-AUDIT.md`.
 
 ### 9u. A preset can be right while its facts are stale
@@ -1136,6 +1143,36 @@ Before debugging a query, run a full `ug gen` and re-run it. And when adding a
 fact a preset reads, add it to `QUERYABLE_PROPERTIES` *and* to the
 `analyze_test` fixture — `no_builtin_preset_reads_an_unindexed_property` is
 what turns "returns a confident zero" into a failing test.
+
+### 9v. A name written where the AST walk does not go
+
+The indexer sees a name only if it visits the node holding it, and several
+very ordinary Rust and JS positions are not AST nodes you reach by walking
+expressions. Each of these hid real call sites here, and each reads as dead
+code rather than as a missing feature:
+
+- **A macro's arguments are a `token_tree`, not code.** `println!("{}",
+  render(n))` contains no `call_expression`. Anything reached only through
+  `format!` / `write!` / `vec!` / `assert_eq!` is invisible unless the token
+  stream is walked directly.
+- **Format strings capture identifiers.** Since Rust 2021 `format!("{WIDTH}")`
+  and `{:<CMD_W$}` are reads of those constants. Skipping string literals as
+  prose loses them.
+- **A data type is never called.** It is a parameter, a return, a field. If
+  type positions are not read, every DTO and params struct has an in-degree
+  of zero.
+- **`serde` names functions in strings**, on fields as well as on items:
+  `#[serde(default = "default_hybrid_k")]`.
+- **Module-scope code belongs to no symbol.** A browser bundle's whole wiring
+  layer is top-level; its edges have to leave the *File* node.
+- **A glob import (`use super::*`) re-roots a bare name under the reading
+  module.** Offer the glob candidate too and let the symbol table decide.
+- **An associated constant is written `Kind::ALL`**, so registering it as
+  `module::ALL` matches no spelling anyone uses.
+
+The rule: when the graph says nothing uses something, check how the *name* is
+written at its real use site before believing it. Adding a position to the
+walk is cheap and helps every query; working around a missing edge helps one.
 
 ## 10. Measuring performance without fooling yourself
 

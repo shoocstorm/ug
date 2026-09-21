@@ -78,6 +78,23 @@ pub trait LanguageIndexer: Send + Sync {
     fn extract_dispatch_bindings(&self, _source: &[u8], _root: Node) -> Vec<DispatchBinding> {
         Vec::new()
     }
+
+    /// Calls and value references written at module scope, outside any
+    /// symbol this indexer emits.
+    ///
+    /// Defaults to none, because in most languages module scope holds
+    /// declarations rather than code. It matters for scripts and for
+    /// browser bundles, where the top level *is* the program: the wiring
+    /// that calls `wirePalette()` and hands `openContextTab` to a command
+    /// table lives nowhere else, and without this it is invisible.
+    fn extract_module_refs(
+        &self,
+        _source: &[u8],
+        _root: Node,
+        _ctx: &FileContext,
+    ) -> crate::types::ModuleRefs {
+        crate::types::ModuleRefs::default()
+    }
 }
 
 /// Look up the indexer responsible for a given file extension. Returns
