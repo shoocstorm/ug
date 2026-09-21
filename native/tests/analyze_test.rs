@@ -179,6 +179,15 @@ async fn seeded_store(tmp: &TempDir) -> Db {
                     // where there is one — mirroring `facts::compute`, so
                     // "no boundary" reads as a measured zero while the
                     // detail columns stay genuinely absent.
+                    // File nodes only, like `facts::compute`. `login.rs`
+                    // imports `auth.rs`, so `auth.rs` is reached and
+                    // `login.rs` is the fixture's orphan.
+                    if s.node_type == "File" {
+                        f.insert(
+                            "external_in_degree".into(),
+                            FactValue::Int(s.in_degree),
+                        );
+                    }
                     f.insert(
                         "boundary".into(),
                         FactValue::Int(i64::from(s.boundary.is_some())),
@@ -268,6 +277,94 @@ async fn every_builtin_preset_executes() {
         }
     }
     assert!(failed.is_empty(), "presets failed to execute:\n{}", failed.join("\n"));
+}
+
+/// Presets about production code must not rank test scaffolding.
+///
+/// Nine of them did. A test fixture called by forty tests carries a high
+/// in-degree and often a doc comment, which is exactly what these rank on,
+/// so it lands near the top of every one — `where_to_start` opened with
+/// five test helpers in its top twelve, and `duplicate_names` returned
+/// twenty rows of per-module `run`/`node`/`args` locals.
+///
+/// The list is explicit rather than "every preset", because plenty of them
+/// are *supposed* to see tests: `test_ratio` counts them, `untested_symbols`
+/// and `test_for` walk from them, `impact` must include them in a blast
+/// radius, and a census of the repo is a census of the repo. Naming the
+/// ones that must not is the only version of this rule that is true.
+#[tokio::test]
+async fn presets_about_production_code_exclude_tests() {
+    const PRODUCTION_ONLY: &[&str] = &[
+        "where_to_start",
+        "god_classes",
+        "classes_by_members",
+        "param_bloat",
+        "deep_nesting",
+        "fanout_offenders",
+        "risky_symbols",
+        "duplicate_names",
+        "long_functions",
+        "long_functions_by_code",
+        "dead_code",
+        "token_docs",
+        "undercommented_complexity",
+        "undocumented_hotspots",
+    ];
+
+    let tmp = TempDir::new().unwrap();
+    let db = seeded_store(&tmp).await;
+
+    let mut offenders: Vec<String> = Vec::new();
+    for name in PRODUCTION_ONLY {
+        let p = presets::find(name)
+            .unwrap_or_else(|| panic!("`{name}` is not a preset — was it renamed?"));
+        assert!(
+            p.gql.contains("is_test = 0"),
+            "`{name}` claims to be about production code but never filters `is_test`"
+        );
+
+        // The filter has to survive into the answer, not just the string:
+        // a `WITH` that drops the column before the predicate runs compiles
+        // and returns tests anyway.
+        let mut args = BTreeMap::new();
+        for param in p.params {
+            if param.default.is_none() {
+                args.insert(param.name.to_string(), "src/core/auth.rs".to_string());
+            }
+        }
+        // `min_loc` / `min_params` / `min_depth` default high enough to
+        // return nothing on a fixture this small, which would make the
+        // assertion below vacuous. Floor them.
+        for param in p.params {
+            if matches!(param.name, "min_loc" | "min_params" | "min_depth") {
+                args.insert(param.name.to_string(), "0".to_string());
+            }
+        }
+        let answer = analyze::run(
+            &db,
+            &AnalyzeParams {
+                preset: Some(p.name.to_string()),
+                args,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        for row in &answer.page.rows {
+            for cell in row {
+                if let QueryValue::Str(v) = cell {
+                    if v.contains("tests/") || v.contains("t_verify") {
+                        offenders.push(format!("{name}: {v}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "presets about production code returned test symbols:\n{}",
+        offenders.join("\n")
+    );
 }
 
 /// Every preset must also name properties the store actually holds.

@@ -238,15 +238,32 @@ pub static BUILTIN: &[Preset] = &[
         headline: None,
         next: NO_NEXT,
     },
+    // Two filters, both of which this preset shipped without and both of
+    // which decided its whole first page.
+    //
+    // `is_test = 0`: with no such clause, five of the top twelve rows on
+    // this repo were test scaffolding — `sample_graph`, `router_for`,
+    // `fixture`, `targets`. A test fixture called by forty tests has a high
+    // in-degree and a doc comment, which is exactly what this ranks on, and
+    // "the reading order for a newcomer" that opens with a fixture is a
+    // wrong answer in the shape of a right one.
+    //
+    // `loc >= 15`: the six rows underneath were 3-to-10-line delegating
+    // helpers (`index`, `flag_value`, `project_dir`, `die`). They are
+    // genuinely the most-called functions in the repo and there is nothing
+    // to learn from reading them. `loc` is a *span*, so a three-line
+    // function carrying a twelve-line doc comment still passes — which is
+    // the right call: someone wrote twelve lines about it for a reason.
     Preset {
         name: "where_to_start",
         category: Category::Census,
-        description: "Documented, heavily depended-upon symbols — the reading order for a newcomer.",
+        description: "Documented, heavily depended-upon symbols of some substance — the reading order for a newcomer. Excludes tests and one-line wrappers.",
         params: NO_PARAMS,
         gql: "MATCH (n) \
-              WHERE n.has_doc = 1 AND n.node_type IN ['Function', 'Class', 'Interface'] \
+              WHERE n.has_doc = 1 AND n.is_test = 0 AND n.loc >= 15 \
+                AND n.node_type IN ['Function', 'Class', 'Interface'] \
               RETURN elementKey(n) AS id, n.in_degree AS depended_on_by, n.loc AS loc \
-              ORDER BY depended_on_by DESC \
+              ORDER BY depended_on_by DESC, loc DESC, id ASC \
               LIMIT 200",
         headline: None,
         next: NO_NEXT,
@@ -283,9 +300,15 @@ pub static BUILTIN: &[Preset] = &[
     Preset {
         name: "size_histogram",
         category: Category::Size,
-        description: "Distribution of function length across the whole repo.",
+        // `is_test = 0`, so this is the distribution whose tail
+        // `long_functions` lists. Without it the histogram counted 1,871
+        // test functions the tail-listing preset excludes, and the two
+        // disagreed about the population they describe — which is worse
+        // than either answer alone, because the reader assumes they match.
+        description: "Distribution of non-test function length — the population long_functions takes the tail of.",
         params: NO_PARAMS,
         gql: "MATCH (n:Function) \
+              WHERE n.is_test = 0 \
               RETURN CASE \
                        WHEN n.loc > 200 THEN 'e. 200+' \
                        WHEN n.loc > 100 THEN 'd. 101-200' \
@@ -304,9 +327,9 @@ pub static BUILTIN: &[Preset] = &[
         description: "The largest classes, structs, traits and interfaces by line span.",
         params: NO_PARAMS,
         gql: "MATCH (n) \
-              WHERE n.node_type IN ['Class', 'Interface'] \
+              WHERE n.node_type IN ['Class', 'Interface'] AND n.is_test = 0 \
               RETURN elementKey(n) AS id, n.loc AS loc, n.out_degree AS depends_on \
-              ORDER BY loc DESC \
+              ORDER BY loc DESC, id ASC \
               LIMIT 200",
         headline: None,
         next: NO_NEXT,
@@ -336,8 +359,9 @@ pub static BUILTIN: &[Preset] = &[
         params: NO_PARAMS,
         gql: "MATCH (n) \
               WHERE n.node_type IN ['Class', 'Interface'] AND n.members IS NOT NULL \
+                AND n.is_test = 0 \
               RETURN elementKey(n) AS id, n.members AS members, n.loc AS loc \
-              ORDER BY members DESC \
+              ORDER BY members DESC, id ASC \
               LIMIT 200",
         headline: None,
         next: NO_NEXT,
@@ -353,9 +377,9 @@ pub static BUILTIN: &[Preset] = &[
             list: false,
         }],
         gql: "MATCH (n:Function) \
-              WHERE n.params > $min_params \
+              WHERE n.params > $min_params AND n.is_test = 0 \
               RETURN elementKey(n) AS id, n.params AS params, n.loc AS loc \
-              ORDER BY params DESC \
+              ORDER BY params DESC, id ASC \
               LIMIT 200",
         headline: None,
         next: NO_NEXT,
@@ -371,9 +395,9 @@ pub static BUILTIN: &[Preset] = &[
             list: false,
         }],
         gql: "MATCH (n:Function) \
-              WHERE n.max_nesting >= $min_depth \
+              WHERE n.max_nesting >= $min_depth AND n.is_test = 0 \
               RETURN elementKey(n) AS id, n.max_nesting AS nesting, n.loc AS loc \
-              ORDER BY nesting DESC \
+              ORDER BY nesting DESC, loc DESC, id ASC \
               LIMIT 200",
         headline: None,
         next: NO_NEXT,
@@ -402,10 +426,24 @@ pub static BUILTIN: &[Preset] = &[
         headline: None,
         next: NO_NEXT,
     },
+    // This preset is called `comment_density` and returned three raw sums
+    // ordered by `code_lines DESC` — i.e. by how *big* each folder is. The
+    // top row was the biggest folder, not the densest, and "where the prose
+    // actually is" was answered with "wherever the code is".
+    //
+    // On this repo the two orders barely overlap: by size the list opens
+    // with `vis/js` (14,176 code lines, 17% prose) and `cli` (17%); by
+    // density it opens with `graph` (34%), `storage` (31%) and `indexer`
+    // (31%), which sat 8th, 9th and 10th. A reader taking the first rows as
+    // the answer got the opposite of the finding.
+    //
+    // `comment_lines` and `doc_lines` stay separate columns — the gap
+    // between "has prose" and "has a doc comment" is the finding this
+    // section exists for — and `prose_pct` sums them only to rank.
     Preset {
         name: "comment_density",
         category: Category::Documentation,
-        description: "Comment-to-code line ratio per folder — where the prose actually is.",
+        description: "Comment-to-code line ratio per folder, densest first — where the prose actually is.",
         params: NO_PARAMS,
         gql: "MATCH (n:Function) \
               WHERE n.is_test = 0 \
@@ -414,8 +452,9 @@ pub static BUILTIN: &[Preset] = &[
                    sum(n.comment_lines) AS comment_lines, \
                    sum(n.doc_lines) AS doc_lines \
               WHERE code_lines > 50 \
-              RETURN folder, code_lines, comment_lines, doc_lines \
-              ORDER BY code_lines DESC \
+              RETURN folder, code_lines, comment_lines, doc_lines, \
+                     (comment_lines + doc_lines) * 100 / code_lines AS prose_pct \
+              ORDER BY prose_pct DESC, code_lines DESC, folder ASC \
               LIMIT 200",
         headline: None,
         next: NO_NEXT,
@@ -462,17 +501,28 @@ pub static BUILTIN: &[Preset] = &[
         headline: None,
         next: NO_NEXT,
     },
+    // "Least-documented first", ordered by `documented ASC` — a raw count,
+    // so the ranking was decided by how *small* a folder is. A folder with
+    // 5 symbols and 3 documented (60%) outranked one with 123 and 55 (45%)
+    // as "worse documented", and on this repo it did: `native` (60%) came
+    // third and `mcp` (45%) eighth.
+    //
+    // Sorting on the ratio is what the description always claimed, and
+    // showing it is what lets a reader see that `vis/js` at 0/759 and a
+    // 0/7 stub are not the same problem. `total DESC` breaks the ties,
+    // which are dense once the key is a percentage — 0% covers four
+    // folders here.
     Preset {
         name: "doc_coverage_by_folder",
         category: Category::Documentation,
-        description: "Which folders are worst documented, least-documented first.",
+        description: "Which folders are worst documented, by the fraction of symbols carrying a doc comment.",
         params: NO_PARAMS,
         gql: "MATCH (n) \
               WHERE n.node_type IN ['Function', 'Class', 'Interface'] AND n.is_test = 0 \
               WITH n.folder AS folder, count(*) AS total, sum(n.has_doc) AS documented \
               WHERE total >= 5 \
-              RETURN folder, total, documented \
-              ORDER BY documented ASC, total DESC \
+              RETURN folder, total, documented, documented * 100 / total AS documented_pct \
+              ORDER BY documented_pct ASC, total DESC, folder ASC \
               LIMIT 200",
         headline: None,
         next: NO_NEXT,
@@ -531,31 +581,76 @@ pub static BUILTIN: &[Preset] = &[
         headline: None,
         next: NO_NEXT,
     },
+    // `external_in_degree`, not `in_degree`. A File node's in-degree counts
+    // only file-incident edges (`Imports`, `References`, `Exports`,
+    // `DependsOn`), so a module whose functions are called from thirty other
+    // files still reads as zero — Agents.md §11b. Asking it that way listed
+    // **145 of this repo's 213 files**, including every test file, every
+    // `.js` part and every doc, which is the same "1.7% of the list is worth
+    // reading" failure the `dead_code` audit fixed with `name_mentions`.
+    //
+    // Three narrowings, each one cutting a category whose answer is
+    // structurally fixed rather than interesting:
+    //
+    // - `external_in_degree = 0` — nothing outside reaches the file *or
+    //   anything in it*. 145 → 31.
+    // - `is_test = 0` — a test file is never imported by anything. That is
+    //   what a test is, not a finding. 39 of the 145 were tests.
+    // - not `documentation` — markdown and PDF are never imported either,
+    //   and 19 of the remaining 31 rows were docs burying 7 real ones.
+    //   Written as `IS NULL OR <>` because the classifier only has an
+    //   opinion about 14% of files and a bare `<>` drops every NULL, i.e.
+    //   every code file.
+    //
+    // Ordered, unlike the original. Five runs of the same binary over the
+    // same store agreed, so the engine's scan order is deterministic — but
+    // `LIMIT 200` with no `ORDER BY` still means a repo with more than 200
+    // orphans drops rows by store order rather than by anything the caller
+    // asked for, and a re-ingest is free to move that order (Agents.md §9c).
     Preset {
         name: "orphan_files",
         category: Category::DeadCode,
-        description: "Files nothing imports or references.",
+        description: "Code files nothing outside them reaches — no import, and no call into any symbol they hold. Excludes tests and docs, which are never imported by design.",
         params: NO_PARAMS,
         gql: "MATCH (n:File) \
-              WHERE n.in_degree = 0 \
-              RETURN elementKey(n) AS id \
+              WHERE n.external_in_degree = 0 AND n.is_test = 0 \
+                AND (n.classification IS NULL OR n.classification <> 'documentation') \
+              RETURN elementKey(n) AS id, n.language AS language, n.loc AS lines \
+              ORDER BY lines DESC, id ASC \
               LIMIT 200",
         headline: None,
-        next: NO_NEXT,
+        next: &[
+            ("analyze dead_code", "the symbol-level version of the same question"),
+            ("find_usages <symbol>", "confirm one file's symbols really have no callers"),
+        ],
     },
+    // `is_test = 0` is what makes this preset say anything. Including
+    // tests, the top of the list on this repo was `run` (14), `node` (14),
+    // `args`, `argv`, `row`, `item` — per-test-module local helpers, in a
+    // list whose stated purpose is to find duplication. Twenty rows, none
+    // actionable. Excluding them leaves eight, and all eight are the same
+    // function reimplemented once per language extractor: `collect_calls`,
+    // `extract_params`, `record_type_refs`, `signature_type_refs`, `visit`.
+    //
+    // `folders` separates the two cases the description names: a name in
+    // one folder is a family (five extractors implementing one interface);
+    // a name spread across several is duplication. Without it every row
+    // needs a `find_symbols` call to interpret.
     Preset {
         name: "duplicate_names",
         category: Category::DeadCode,
-        description: "The same function name defined in many places — possible duplication or a naming convention.",
+        description: "The same non-test function name defined in many places. `folders` tells the two cases apart: 1 is a per-variant family, several is duplication.",
         params: NO_PARAMS,
         gql: "MATCH (n:Function) \
-              WITH n.name AS name, count(*) AS definitions \
+              WHERE n.is_test = 0 \
+              WITH n.name AS name, count(*) AS definitions, \
+                   count(DISTINCT n.folder) AS folders \
               WHERE definitions > 3 \
-              RETURN name, definitions \
-              ORDER BY definitions DESC \
+              RETURN name, definitions, folders \
+              ORDER BY definitions DESC, name ASC \
               LIMIT 200",
         headline: None,
-        next: NO_NEXT,
+        next: &[("find_symbols <name>", "where the definitions actually are")],
     },
     // ── architecture ──────────────────────────────────────────────────
     Preset {
@@ -582,9 +677,10 @@ pub static BUILTIN: &[Preset] = &[
             list: false,
         }],
         gql: "MATCH (n) \
-              WHERE n.out_degree > $min_fanout AND n.node_type <> 'File' AND n.node_type <> 'Folder' \
+              WHERE n.out_degree > $min_fanout AND n.is_test = 0 \
+                AND n.node_type <> 'File' AND n.node_type <> 'Folder' \
               RETURN elementKey(n) AS id, n.out_degree AS depends_on, n.loc AS loc \
-              ORDER BY depends_on DESC \
+              ORDER BY depends_on DESC, id ASC \
               LIMIT 200",
         headline: None,
         next: NO_NEXT,
@@ -868,10 +964,10 @@ pub static BUILTIN: &[Preset] = &[
         description: "Large, undocumented, heavily depended-upon symbols — dangerous to touch.",
         params: NO_PARAMS,
         gql: "MATCH (n) \
-              WHERE n.in_degree > 5 AND n.loc > 80 AND n.has_doc = 0 \
+              WHERE n.in_degree > 5 AND n.loc > 80 AND n.has_doc = 0 AND n.is_test = 0 \
                 AND n.node_type IN ['Function', 'Class', 'Interface'] \
               RETURN elementKey(n) AS id, n.in_degree AS depended_on_by, n.loc AS loc \
-              ORDER BY depended_on_by DESC \
+              ORDER BY depended_on_by DESC, loc DESC, id ASC \
               LIMIT 200",
         headline: None,
         next: NO_NEXT,
@@ -947,12 +1043,24 @@ mod tests {
     #[test]
     fn variable_length_paths_are_bounded() {
         for p in BUILTIN {
-            for (i, _) in p.gql.match_indices('*') {
-                // `count(*)` is the aggregate wildcard, not a path bound.
-                if p.gql.as_bytes().get(i.wrapping_sub(1)) == Some(&b'(') {
+            // Scan the inside of relationship patterns rather than every
+            // `*` in the query. The previous version skipped only a `*`
+            // preceded by `(` — enough for `count(*)`, and it then read the
+            // multiplication in `documented * 100 / total` as an unbounded
+            // path. Anchoring on `[...]` is what separates the two: a path
+            // bound can only appear inside a relationship pattern, and a
+            // genuinely unbounded `[:Calls*]` still fails here, which the
+            // "skip unless a digit follows" shortcut would not.
+            for (open, _) in p.gql.match_indices('[') {
+                let Some(close) = p.gql[open..].find(']') else {
                     continue;
-                }
-                let bound: String = p.gql[i + 1..]
+                };
+                let inside = &p.gql[open + 1..open + close];
+                // Node-type list literals live in square brackets too.
+                let Some(star) = inside.find('*') else {
+                    continue;
+                };
+                let bound: String = inside[star + 1..]
                     .chars()
                     .take_while(|c| c.is_ascii_digit() || *c == '.')
                     .collect();

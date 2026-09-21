@@ -108,6 +108,7 @@ it by hand.
 | `extension` | Lowercase and bare — `rs`, `md`, `tsx`. Derived with `Path::extension`, the same call `indexer::process_file` uses to decide whether to index a file at all, so every indexed node carries one and a census grouped on it is complete. |
 | `is_test` | Prefers the indexer's file classification, keeps a path heuristic as fallback. |
 | `in_degree` / `out_degree` | Computed once per ingest. `in_degree` moves when some *other* file starts calling a node, which is why incremental ingest must compare it. |
+| `external_in_degree` | **File nodes only.** Dependency edges reaching into the file from another file — counting edges into the File node *and* into every symbol it holds. A File node's own `in_degree` counts only file-incident edges (`Imports`, `References`, `Exports`, `DependsOn`), so a module whose functions are called from thirty places still reads as zero; asking `orphan_files` that way listed 145 of this repo's 213 files. |
 | `language` / `classification` | Stamped on every symbol in a file, not just the File node, so "group by language" is a scan and not a join. |
 | `qualified_name` / `route` / `annotations` | Present for languages that resolve them (Java, TypeScript); reported `NOT INDEXED` where they never exist (e.g. `route` on a docs-only sample). |
 | `boundary` / `boundary_in` / `boundary_out` | Whether this symbol is a system boundary, and in which direction. Written for **every** node on a graph new enough to have looked, so `sum(n.boundary_in)/count(*)` is a real fraction — and omitted entirely on an older graph, because most symbols genuinely are not boundaries and a blanket `0` would read as a finished measurement rather than a missing one. |
@@ -126,17 +127,19 @@ with "run `ug gen`" rather than read as garbage.
 `node_type` · `name` · `file` · `folder` · `extension` · `language` ·
 `classification` · `loc` · `code_lines` · `comment_lines` · `doc_lines` ·
 `params` · `max_nesting` · `members` · `has_doc` · `has_comments` · `is_test` ·
-`in_degree` · `out_degree` · `qualified_name` · `route` · `annotations` ·
+`in_degree` · `out_degree` · `external_in_degree` · `name_mentions` ·
+`qualified_name` · `route` · `annotations` ·
 `boundary` · `boundary_in` · `boundary_out` · `boundary_kinds` ·
 `boundary_protocols` · `boundary_detail` · `start_line` · `end_line`.
 
-Four pairs are easy to confuse, and picking the wrong one changes the answer:
+Five pairs are easy to confuse, and picking the wrong one changes the answer:
 
 | Use | Not | Because |
 |---|---|---|
 | `code_lines` | `loc` | `loc` is a *span* — it counts blanks and comments. On this repo the longest function is 582 lines by span and 446 by code, a 23% gap. |
 | `has_comments` | `has_doc` | `has_doc` is a doc-comment flag only. Of 1597 functions here, 828 carry prose but just 499 have a doc comment. |
 | `is_test` | a path filter | `is_test` prefers the indexer's classification and catches test files that aren't named like one. |
+| `external_in_degree` | `in_degree` | On a File node `in_degree` is the *import* graph alone. Only `external_in_degree` sees a file whose symbols are called from elsewhere. |
 | `extension` | `language` | One language covers several extensions — `.js`, `.ts` and `.tsx` all report `typescript`, so `language` cannot tell you whether a repo is typed. |
 
 ---

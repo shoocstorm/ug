@@ -1036,6 +1036,16 @@ full analysis built on it.
 Grep shape: `== "somename"` or a `matches!` on a string, where the value comes
 from an indexer, a deserialiser, or another language's syntax.
 
+**A third instance, in a list of anchored substrings.** `TEST_PATH_MARKERS`
+had `"/tests/"` and `"_tests."` and nothing for a file simply *named*
+`tests.rs` — no leading slash, no leading underscore. `agent_tools/tests.rs`
+matched neither, so its 24 un-annotated helpers read as production code and
+`fixture` (in-degree 43) ranked sixth in `where_to_start`. The anchoring is
+right and must stay — an unanchored `test_` swept in `fastest_path.ts` — but
+**an anchored-substring list is a set of spellings, and the same question
+applies to it: which members of this family are missing?** Here: `/test.`,
+`/tests.`, `/spec.`, `/specs.`.
+
 ### 9p. The installed git hook re-indexes with a *different build* of ug
 
 Working on the indexer, the extractors or `storage::facts` in this repo has a
@@ -2204,6 +2214,49 @@ fixture — do not narrate the trend.
 
 This is the sampling cousin of §10's rule about medians of five: the same
 discipline, applied to a model's output instead of a clock.
+
+### 11j. A ranking whose sort key is not what its name promises
+
+Read every `analyze` preset's output against its own description and six of
+the thirty-nine were answering a different question, all in the shape of a
+correct answer. Two shared one cause, and it is the one that generalises.
+
+`comment_density` — *"comment-to-code **ratio** per folder — where the prose
+actually is"* — returned three raw sums ordered by `code_lines DESC`, i.e. by
+how **big** each folder is. `doc_coverage_by_folder` — *"least-documented
+first"* — ordered by `documented ASC`, a raw **count**, so it ranked by how
+**small** a folder is: `native` (3 of 5, 60%) came third as worst-documented
+while `mcp` (55 of 123, 45%) came eighth. Both tables were arithmetically
+correct and neither showed the ratio it was named for, so nothing in the
+output contradicted the heading a reader had already believed.
+
+**The rule: if a description contains a ratio word — densest, least, worst,
+per, coverage, rate — the `ORDER BY` key has to be that ratio, and the ratio
+has to be a column.** A numerator or a denominator on its own ranks by
+volume, which correlates with the ratio just enough to look plausible. And
+show it: the reason nobody noticed is that the number the ordering claimed to
+use was never on screen.
+
+Two more from the same pass, worth having on their own:
+
+- **`Contains` cannot be written as a GQL relationship label.** It is lexed as
+  the `CONTAINS` string operator, so `-[:Contains]->` fails with *"expected
+  relationship label after ':'"* — an error that points at the colon, says
+  nothing about keywords, and reads as "no such label in this graph". Backticks
+  are rejected too. The only form that works is
+  `MATCH (a)-[r]->(b) WHERE type(r) = 'Contains'`.
+- **A guard that scans for a character will misread the first query that uses
+  it arithmetically.** `variable_length_paths_are_bounded` scanned for `*`,
+  skipping one preceded by `(` so that `count(*)` passed — and then read the
+  `*` in `documented * 100 / total` as an unbounded path. Anchoring the scan
+  on the syntactic context instead (`*` **inside** a `[...]` relationship
+  pattern) keeps the guard's teeth: a genuinely unbounded `[:Calls*]` still
+  fails it, which a "skip unless a digit follows" shortcut would not. Verified
+  by breaking a preset on purpose and watching it fail — a tightened guard
+  that no longer catches anything is the failure mode being traded for.
+
+Full audit, including what was rejected with the number that killed it:
+`docs/dev/PRESET-AUDIT.md`.
 
 ---
 

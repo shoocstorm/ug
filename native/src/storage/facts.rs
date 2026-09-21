@@ -89,6 +89,28 @@ pub struct FactContext<'a> {
     /// dead `open` is hidden by a live `open` elsewhere, never the reverse.
     /// That is the right way to be wrong for a list of candidates.
     name_mentions: HashMap<&'a str, u32>,
+    /// Cross-file dependency edges reaching into each *file*, keyed by
+    /// path — counting edges into the File node itself and into every
+    /// symbol that file holds.
+    ///
+    /// The companion to [`Self::in_degree`] for File nodes, and the reason
+    /// `orphan_files` is worth reading. A File node's own in-degree counts
+    /// only *file-incident* edges — `Imports`, `References`, `Exports`,
+    /// `DependsOn` — so a module whose functions are called from thirty
+    /// other files still has an in-degree of zero (Agents.md §11b). On this
+    /// repository that made 145 of 213 files "orphans", including every
+    /// test file, every `.js` part and every doc: 68% of the repo, in a
+    /// list whose whole purpose is to be short.
+    ///
+    /// Counting what reaches the file's *contents* is the question the
+    /// preset was always asking. It takes 31 rows, and the seven that are
+    /// code are all real.
+    ///
+    /// Keyed by path rather than by node id because that is what makes the
+    /// roll-up free: a symbol's `file` and its File node's `file` are the
+    /// same string, so one counter serves both without a second pass over
+    /// `Contains` edges.
+    external_in: HashMap<&'a str, u32>,
     /// Whether this graph was written by a build that records comment
     /// metrics. A graph older than that answers "how many functions have
     /// comments" with zero, which is worse than refusing.
@@ -115,6 +137,15 @@ impl<'a> FactContext<'a> {
         let mut in_degree: HashMap<&'a str, u32> = HashMap::new();
         let mut out_degree: HashMap<&'a str, u32> = HashMap::new();
         let mut members: HashMap<&'a str, u32> = HashMap::new();
+        let mut external_in: HashMap<&'a str, u32> = HashMap::new();
+        // One pass, so the edge list is walked once however large it is —
+        // 2.2M edges on the `big500k` sample. `file_of` is the only extra
+        // allocation and its keys are borrowed like every other map here.
+        let file_of: HashMap<&'a str, &'a str> = graph
+            .nodes
+            .iter()
+            .map(|n| (n.id.as_str(), n.file.as_deref().unwrap_or("")))
+            .collect();
         for e in &graph.edges {
             if matches!(e.edge_type, GraphEdgeType::Contains) {
                 *members.entry(&e.source).or_insert(0) += 1;
@@ -122,6 +153,15 @@ impl<'a> FactContext<'a> {
             }
             *in_degree.entry(&e.target).or_insert(0) += 1;
             *out_degree.entry(&e.source).or_insert(0) += 1;
+
+            // Skipped above for `Contains`, which is structure: a
+            // Folder→File edge has two different `file` values and would
+            // otherwise make every file look reached by its own directory.
+            if let (Some(src), Some(tgt)) = (file_of.get(&*e.source), file_of.get(&*e.target)) {
+                if src != tgt && !tgt.is_empty() {
+                    *external_in.entry(*tgt).or_insert(0) += 1;
+                }
+            }
         }
         // Same borrowing discipline as the degree maps above: every key is
         // a subslice of a node field, so a pass over ~5.7k nodes allocates
@@ -152,6 +192,7 @@ impl<'a> FactContext<'a> {
             out_degree,
             members,
             name_mentions,
+            external_in,
             has_line_metrics: schema >= 2,
             has_boundaries: schema >= 4,
         }
@@ -186,6 +227,18 @@ const TEST_PATH_MARKERS: &[&str] = &[
     ".spec.",
     "_spec.",
     "_specs.",
+    // A file *called* `tests.rs`, with nothing before the word to anchor on.
+    // `/tests/` needs a trailing slash and `_tests.` needs a leading
+    // underscore, so `native/src/agent_tools/tests.rs` matched neither and
+    // its 24 un-annotated helpers — `node`, `edge`, `fixture` — read as
+    // production code. `fixture` has an in-degree of 43, which put it near
+    // the top of `where_to_start`, `dependency_fanin` and `risky_symbols`.
+    // The `/` anchor is what keeps `latest.rs` and `manifest.rs` out: the
+    // character before `test.` there is a letter, not a separator.
+    "/test.",
+    "/tests.",
+    "/spec.",
+    "/specs.",
 ];
 
 /// Annotation names that mark a symbol as test code.
@@ -556,6 +609,21 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
         "in_degree".into(),
         FactValue::Int(ctx.in_degree.get(n.id.as_str()).copied().unwrap_or(0) as i64),
     );
+
+    // File nodes only, and deliberately so. For a symbol this would be a
+    // second in-degree differing from the first only in whether the caller
+    // shared a file, which is a distinction no preset asks for. For a File
+    // node it is a different question entirely — see `FactContext::external_in`
+    // and Agents.md §11b — and it is the only one that makes "is anything in
+    // this file used" answerable in a single scan.
+    if matches!(n.node_type, GraphNodeType::File) {
+        if let Some(file) = n.file.as_deref().filter(|s| !s.is_empty()) {
+            f.insert(
+                "external_in_degree".into(),
+                FactValue::Int(ctx.external_in.get(file).copied().unwrap_or(0) as i64),
+            );
+        }
+    }
     f.insert(
         "out_degree".into(),
         FactValue::Int(ctx.out_degree.get(n.id.as_str()).copied().unwrap_or(0) as i64),
@@ -788,7 +856,14 @@ mod tests {
             let f = compute(&node("f", Some(path)), &ctx_of(vec![]));
             assert_eq!(f["is_test"], FactValue::Int(1), "{path} should read as test");
         }
-        for path in ["src/latest.rs", "src/contest.ts", "src/a.rs"] {
+        // A file *named* for tests, with nothing before the word to anchor
+        // on — the form `/tests/` and `_tests.` both miss.
+        for path in ["src/agent_tools/tests.rs", "src/test.rs", "pkg/spec.ts"] {
+            let f = compute(&node("f", Some(path)), &ctx_of(vec![]));
+            assert_eq!(f["is_test"], FactValue::Int(1), "{path} should read as test");
+        }
+        // The same marker unanchored would sweep all of these in.
+        for path in ["src/latest.rs", "src/contest.ts", "src/a.rs", "src/manifest.rs"] {
             let f = compute(&node("f", Some(path)), &ctx_of(vec![]));
             assert_eq!(
                 f["is_test"],
@@ -827,6 +902,64 @@ mod tests {
             let f = compute(&node("f", Some(path)), &ctx_of(vec![]));
             assert_eq!(f.get("extension"), None, "{path}");
         }
+    }
+
+    /// The distinction `orphan_files` rests on: `a.rs` is never imported,
+    /// but a function inside it is called from `b.rs`, so the file is not
+    /// an orphan. Its own `in_degree` cannot see that (Agents.md §11b) and
+    /// `external_in_degree` is the fact that can.
+    #[test]
+    fn a_files_external_in_degree_counts_what_reaches_its_symbols() {
+        let mut file_a = node("file:a.rs", Some("a.rs"));
+        file_a.node_type = GraphNodeType::File;
+        let mut file_b = node("file:b.rs", Some("b.rs"));
+        file_b.node_type = GraphNodeType::File;
+        let inner_a = node("fn:a", Some("a.rs"));
+        let also_a = node("fn:a2", Some("a.rs"));
+        let inner_b = node("fn:b", Some("b.rs"));
+
+        let g: &'static GraphData = Box::leak(Box::new(GraphData {
+            nodes: vec![
+                file_a.clone(),
+                file_b.clone(),
+                inner_a,
+                also_a.clone(),
+                inner_b,
+            ],
+            edges: vec![
+                // Across the file boundary — the one that counts.
+                edge("fn:b", "fn:a", GraphEdgeType::Calls),
+                // Within a.rs: a module talking to itself is not a user.
+                edge("fn:a2", "fn:a", GraphEdgeType::Calls),
+                // Structure, skipped like every other Contains — a folder
+                // edge has two different `file` values and would otherwise
+                // make every file look reached by its own directory.
+                edge("folder:.", "file:a.rs", GraphEdgeType::Contains),
+            ],
+            stats: None,
+            resolution: None,
+        }));
+        let ctx = FactContext::new(g);
+
+        assert_eq!(
+            compute(&file_a, &ctx)["external_in_degree"],
+            FactValue::Int(1),
+            "one call from b.rs, and neither the in-file call nor Contains"
+        );
+        assert_eq!(
+            compute(&file_b, &ctx)["external_in_degree"],
+            FactValue::Int(0),
+            "nothing reaches b.rs — this is the orphan"
+        );
+        assert_eq!(
+            compute(&file_a, &ctx)["in_degree"],
+            FactValue::Int(0),
+            "the file node itself is imported by nothing — the §11b trap"
+        );
+        assert!(
+            !compute(&also_a, &ctx).contains_key("external_in_degree"),
+            "File nodes only"
+        );
     }
 
     /// `Contains` is folder→file→symbol structure. Counting it would give

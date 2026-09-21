@@ -177,6 +177,7 @@ pub const QUERYABLE_PROPERTIES: &[&str] = &[
     "is_test",
     "in_degree",
     "out_degree",
+    "external_in_degree",
     "name_mentions",
     "qualified_name",
     "route",
