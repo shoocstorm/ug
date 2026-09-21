@@ -800,13 +800,47 @@ fn resolve_call_edges(index_result: &crate::types::IndexResult, acc: &mut GraphA
             // something else is an enum variant or an external, and neither
             // is what "who uses this setting" means.
             for used in &sym.uses {
-                let Some(target_id) = qualified.by_qualified.get(used) else {
+                // The two spellings of one path, same as the call ladder
+                // below: a constant declared `crate::analyze::X` is read
+                // from another file as `ultragraph::analyze::X`, and an
+                // exact-match-only lookup missed every cross-file constant
+                // in the repo — which is how `QUERYABLE_PROPERTIES`, read
+                // from two other files, came to look unused.
+                let sep = crate::indexer::scope::module_sep(&file.language);
+                let Some(target_id) = qualified
+                    .by_qualified
+                    .get(used)
+                    .or_else(|| qualified.by_path_suffix(used, sep))
+                else {
                     continue;
                 };
                 if !constant_ids.contains(target_id) {
                     continue;
                 }
                 edges.add(&sym_node_id, &target_id, GraphEdgeType::Uses);
+            }
+
+            // Types named in a type position — parameters, returns, struct
+            // fields. A data type is never called, so this is the only
+            // pass that can see a dependency on one.
+            for referenced in &sym.type_refs {
+                let sep = crate::indexer::scope::module_sep(&file.language);
+                let Some(target_id) = qualified
+                    .types
+                    .get(referenced)
+                    .or_else(|| qualified.by_qualified.get(referenced))
+                    .or_else(|| qualified.by_path_suffix(referenced, sep))
+                    .cloned()
+                else {
+                    continue;
+                };
+                // A type that mentions itself — a recursive `Box<Self>`, a
+                // builder returning its own type — is not a dependency.
+                if target_id == sym_node_id {
+                    continue;
+                }
+                edges.add(&sym_node_id, &target_id, GraphEdgeType::References);
+                resolution.resolved_qualified += 1;
             }
 
             // Functions passed as values — callbacks, route handlers,

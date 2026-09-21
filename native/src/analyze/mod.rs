@@ -173,6 +173,7 @@ pub const QUERYABLE_PROPERTIES: &[&str] = &[
     "has_doc",
     "has_comments",
     "folder",
+    "extension",
     "is_test",
     "in_degree",
     "out_degree",

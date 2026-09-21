@@ -22,6 +22,7 @@ use crate::types::{
     BoundaryDirection, FileClassification, GraphData, GraphEdgeType, GraphNode, GraphNodeType,
 };
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 /// A stored fact value, in the small set of shapes every backend can hold.
 ///
@@ -128,6 +129,9 @@ impl<'a> FactContext<'a> {
         let mut name_mentions: HashMap<&'a str, u32> = HashMap::new();
         let mut scratch: Vec<&'a str> = Vec::new();
         for n in &graph.nodes {
+            if !mentions_count_from(n) {
+                continue;
+            }
             let own = short_name(&n.name);
             scratch.clear();
             collect_mentions(n, &mut scratch);
@@ -416,6 +420,23 @@ fn folder_of(file: &str) -> &str {
     }
 }
 
+/// Lowercase file extension of a repo-relative path, without the dot —
+/// `"rs"`, `"md"`, `"tsx"`. `None` for a path that has none.
+///
+/// `Path::extension` rather than a `rfind('.')`, so it agrees with
+/// `indexer::process_file`, which derives the extension the same way to
+/// decide whether to index the file at all. That agreement is the whole
+/// point: a file with no extension is never indexed, so every File node in
+/// the graph carries this fact and a census grouped on it is complete.
+/// Spelled bare rather than `".rs"` to match `language`, which is also
+/// stored as the value a caller would type in `WHERE n.extension = 'rs'`.
+fn extension_of(file: &str) -> Option<String> {
+    Path::new(file)
+        .extension()?
+        .to_str()
+        .map(|e| e.to_ascii_lowercase())
+}
+
 /// Lines the node spans, inclusive.
 ///
 /// Prefers the indexer's `metrics.loc` and falls back to the line range.
@@ -489,13 +510,16 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
         }
     }
 
-    // Folder and is_test are only meaningful for nodes that live in a
-    // file. Folder nodes carry their own path in `file`, which would make
-    // `folder` self-referential, so they are excluded.
+    // Folder, extension and is_test are only meaningful for nodes that
+    // live in a file. Folder nodes carry their own path in `file`, which
+    // would make `folder` self-referential, so they are excluded.
     if !matches!(n.node_type, GraphNodeType::Folder) {
         if let Some(file) = n.file.as_deref().filter(|s| !s.is_empty()) {
             f.insert("folder".into(), FactValue::Str(folder_of(file).to_string()));
             f.insert("is_test".into(), FactValue::from_bool(is_test_node(n)));
+            if let Some(ext) = extension_of(file) {
+                f.insert("extension".into(), FactValue::Str(ext));
+            }
         }
     }
 
@@ -751,6 +775,29 @@ mod tests {
         assert_eq!(f["folder"], FactValue::Str("a/b".into()));
         let f = compute(&node("f", Some("c.rs")), &ctx_of(vec![]));
         assert_eq!(f["folder"], FactValue::Str("".into()));
+    }
+
+    /// The census groups on this, so a spelling that varies with the
+    /// author's shift key would split one extension across two rows —
+    /// and a dot in a directory name must not be read as one.
+    #[test]
+    fn extension_is_lowercase_bare_and_absent_when_there_is_none() {
+        for (path, want) in [
+            ("a/b/c.rs", "rs"),
+            ("src/App.TSX", "tsx"),
+            ("src/a.test.ts", "ts"),
+            ("docs/v1.2/readme.md", "md"),
+        ] {
+            let f = compute(&node("f", Some(path)), &ctx_of(vec![]));
+            assert_eq!(f["extension"], FactValue::Str(want.into()), "{path}");
+        }
+        // Never indexed in the first place — `indexer::process_file`
+        // returns `None` without an extension — so the fact is absent
+        // rather than a `""` group nothing can explain.
+        for path in ["Makefile", ".gitignore", "src/LICENSE"] {
+            let f = compute(&node("f", Some(path)), &ctx_of(vec![]));
+            assert_eq!(f.get("extension"), None, "{path}");
+        }
     }
 
     /// `Contains` is folder→file→symbol structure. Counting it would give

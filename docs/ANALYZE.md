@@ -105,6 +105,7 @@ it by hand.
 | `has_doc` / `has_comments` | Two separate booleans, deliberately. On this repo 329 functions carry prose but no doc comment; collapsing those into one "documented" figure hides exactly that finding. |
 | `params` / `max_nesting` / `members` | `members` is only populated for languages whose class body encloses its members (Java, Python, TypeScript). A Rust struct's methods live in a separate `impl` block, so Rust types carry no `members` — the coverage line says so rather than ranking them all as memberless. |
 | `folder` | Parent dir of `file`. |
+| `extension` | Lowercase and bare — `rs`, `md`, `tsx`. Derived with `Path::extension`, the same call `indexer::process_file` uses to decide whether to index a file at all, so every indexed node carries one and a census grouped on it is complete. |
 | `is_test` | Prefers the indexer's file classification, keeps a path heuristic as fallback. |
 | `in_degree` / `out_degree` | Computed once per ingest. `in_degree` moves when some *other* file starts calling a node, which is why incremental ingest must compare it. |
 | `language` / `classification` | Stamped on every symbol in a file, not just the File node, so "group by language" is a scan and not a join. |
@@ -122,20 +123,21 @@ with "run `ug gen`" rather than read as garbage.
 
 ### Queryable columns
 
-`node_type` · `name` · `file` · `folder` · `language` · `classification` ·
-`loc` · `code_lines` · `comment_lines` · `doc_lines` · `params` ·
-`max_nesting` · `members` · `has_doc` · `has_comments` · `is_test` ·
+`node_type` · `name` · `file` · `folder` · `extension` · `language` ·
+`classification` · `loc` · `code_lines` · `comment_lines` · `doc_lines` ·
+`params` · `max_nesting` · `members` · `has_doc` · `has_comments` · `is_test` ·
 `in_degree` · `out_degree` · `qualified_name` · `route` · `annotations` ·
 `boundary` · `boundary_in` · `boundary_out` · `boundary_kinds` ·
 `boundary_protocols` · `boundary_detail` · `start_line` · `end_line`.
 
-Three pairs are easy to confuse, and picking the wrong one changes the answer:
+Four pairs are easy to confuse, and picking the wrong one changes the answer:
 
 | Use | Not | Because |
 |---|---|---|
 | `code_lines` | `loc` | `loc` is a *span* — it counts blanks and comments. On this repo the longest function is 582 lines by span and 446 by code, a 23% gap. |
 | `has_comments` | `has_doc` | `has_doc` is a doc-comment flag only. Of 1597 functions here, 828 carry prose but just 499 have a doc comment. |
 | `is_test` | a path filter | `is_test` prefers the indexer's classification and catches test files that aren't named like one. |
+| `extension` | `language` | One language covers several extensions — `.js`, `.ts` and `.tsx` all report `typescript`, so `language` cannot tell you whether a repo is typed. |
 
 ---
 

@@ -76,6 +76,22 @@ pub struct Symbol {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub value_refs: Vec<String>,
 
+    /// Qualified names of the types this symbol names in a *type position*
+    /// — parameter and return types, struct field types, a constant's
+    /// declared type, a type alias's target.
+    ///
+    /// The half of "who uses this" that calls cannot see. A data type is
+    /// never called: it is deserialised into, returned, stored in a field.
+    /// Before this existed, every `serde` payload, params struct and
+    /// response DTO in a codebase had an in-degree of zero and read as
+    /// dead — 20-odd of them in this repo alone — and "what breaks if I
+    /// change this struct" had no answer at all.
+    ///
+    /// Resolved to `References` edges, the same as [`Self::value_refs`]:
+    /// naming a type is a dependency on it, not a call to it.
+    #[serde(rename = "typeRefs", default, skip_serializing_if = "Vec::is_empty")]
+    pub type_refs: Vec<String>,
+
     /// Effective HTTP route this symbol serves, e.g. `GET /api/orders/{id}`,
     /// composed from type-level and member-level mapping annotations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -452,6 +468,16 @@ pub struct Dependency {
 /// not the same as [`crate::indexer::INDEXER_VERSION`], which invalidates
 /// the content cache: this one tells a *reader* of an already-written
 /// `graph.json` which facts it is entitled to trust.
+///
+/// **"Cannot have" is the test, and not every new fact fails it.** A fact
+/// that `storage::facts` derives from a field `graph.json` has always
+/// carried — `extension`, from `n.file` — appears the moment an old
+/// `graph.json` is re-ingested by this build, so marking those graphs
+/// stale would claim a format change that did not happen. The staleness
+/// there is "the *store* was written by an older ug", which `analyze`
+/// already reports per property as `NOT INDEXED` in its coverage line.
+/// Bump only when the indexer had to start writing something new — as
+/// version 7 did, where a file's `loc` did not exist to derive from.
 ///
 /// The distinction matters because of the failure this whole feature is
 /// built around. A graph written before comment metrics existed answers

@@ -151,6 +151,12 @@ async fn seeded_store(tmp: &TempDir) -> Db {
                         ("params", FactValue::Int(2)),
                         ("max_nesting", FactValue::Int(3)),
                         ("folder", FactValue::Str(folder.to_string())),
+                        (
+                            "extension",
+                            FactValue::Str(
+                                s.file.rsplit_once('.').map(|(_, e)| e).unwrap_or("").to_string(),
+                            ),
+                        ),
                         ("language", FactValue::Str("rust".into())),
                         (
                             "classification",

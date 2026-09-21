@@ -219,12 +219,22 @@ pub static BUILTIN: &[Preset] = &[
     Preset {
         name: "file_kinds",
         category: Category::Census,
-        description: "What the files in this repo are for — the indexer's own classification.",
+        description: "What kinds of file this repo holds: indexed files per extension, and the language each maps to.",
         params: NO_PARAMS,
-        gql: "MATCH (n) \
-              WHERE n.classification IS NOT NULL AND n.node_type <> 'Folder' \
-              RETURN n.classification AS kind, count(*) AS symbols \
-              ORDER BY symbols DESC",
+        // Anchored on `:File` so `count(*)` is files, not the symbols
+        // inside them — `language_breakdown` already counts those, and a
+        // census that silently answered the other question would be
+        // indistinguishable from this one.
+        //
+        // `language` joins the group key rather than being dropped: it is
+        // what separates `.js` from `.ts` mapping to the same grammar, and
+        // it is the column that explains a row a caller did not expect.
+        // `files DESC, extension ASC` because a tie on the count must not
+        // pick its own order (Agents.md §9c).
+        gql: "MATCH (n:File) \
+              RETURN n.extension AS extension, n.language AS language, \
+                     count(*) AS files, sum(n.loc) AS lines \
+              ORDER BY files DESC, extension ASC",
         headline: None,
         next: NO_NEXT,
     },
