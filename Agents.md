@@ -488,7 +488,7 @@ changelog on every bump, and keep engine calls behind the `KnowledgeStore`
 trait (`native/src/storage/store.rs`) so upgrades stay confined to
 `native/src/storage/db.rs`.
 
-## 9. Seventeen bugs this codebase keeps re-introducing
+## 9. Twenty-one bugs this codebase keeps re-introducing
 
 All are invisible in review and silent at runtime, and most have already
 shipped here more than once. Check for them by reflex.
@@ -1096,6 +1096,46 @@ Where it hides:
 Testable without a browser: lift the exit function and the render accessor into
 `node` and assert on the state the exit leaves (`tests/js/walk_exit.mjs`) —
 booting the real page is the CPU runaway in §10r.
+
+### 9t. `in_degree = 0` is not "nothing uses this"
+
+It means *the resolver drew no edge*, which is a far weaker claim. Every
+zero-in-degree symbol in this repo was checked by hand: **462 of them, 8
+genuinely dead**. The other 454 were live code the indexer could not resolve —
+a trait method reached through `dyn`, a handler passed as a value to
+`.route()`, a `serde` payload that only ever arrives deserialised, a JS
+`obj.method()` call, a `deserialize_with = "name"` attribute string.
+
+- Never present an in-degree answer — `dead_code`, `untested_symbols`,
+  `find_usages`, `impact` — as if zero meant unused. Say "nothing *resolves* to
+  it".
+- The fix that works is to ask whether anything still writes the *name* down,
+  resolved or not. That is the `name_mentions` fact (`storage/facts.rs`), which
+  counts raw pre-resolution mentions — callee names, trait names, imported
+  items, parameter and return types, prose. `in_degree = 0 AND
+  name_mentions = 0` took `dead_code` from 462 rows to 111 without losing one
+  of the eight.
+- Verify a dead-code claim textually before acting on it: the identifier
+  appearing exactly once across all tracked code is the only cheap proof.
+  `cargo check` cannot help — a `pub` item in a `pub mod` never warns, which is
+  how two dead `pub async fn`s survived in `storage/db.rs`.
+
+Full audit and what still gets through: `docs/dev/DEAD-CODE-AUDIT.md`.
+
+### 9u. A preset can be right while its facts are stale
+
+Node facts are written at **ingest**, not at query time, and `ug gen` is
+incremental. A fixed `is_test` / `in_degree` only reaches the files that
+particular run touched; every untouched file keeps whatever the build that
+last saw it wrote. The first pass of the dead-code audit returned 96
+`#[tokio::test]` functions from a build whose `is_test_node` already handled
+`tokio::test` correctly.
+
+From the output, "the preset is wrong" and "the facts are old" look identical.
+Before debugging a query, run a full `ug gen` and re-run it. And when adding a
+fact a preset reads, add it to `QUERYABLE_PROPERTIES` *and* to the
+`analyze_test` fixture — `no_builtin_preset_reads_an_unindexed_property` is
+what turns "returns a confident zero" into a failing test.
 
 ## 10. Measuring performance without fooling yourself
 

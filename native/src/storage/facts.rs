@@ -62,6 +62,32 @@ pub struct FactContext<'a> {
     /// because `impl` blocks sit outside the struct they extend. See
     /// [`compute`] for how that asymmetry is kept honest.
     members: HashMap<&'a str, u32>,
+    /// How many times each *short* symbol name is mentioned by some other
+    /// node, keyed by that name.
+    ///
+    /// The companion to [`Self::in_degree`], and the reason `dead_code` is
+    /// worth reading. An in-degree of zero means *the resolver drew no
+    /// edge*, which is a much weaker claim than "nothing uses this": a
+    /// trait method reached through `dyn Trait`, a handler named in a
+    /// `.route()` table, a struct that only ever arrives through
+    /// `serde`, and a JS function called as `obj.method()` all have an
+    /// in-degree of zero and are all live. Every zero-in-degree symbol in
+    /// this repository was checked by hand: 454 of 462 were false
+    /// positives that way.
+    ///
+    /// What separates them is that something, somewhere, still writes the
+    /// name down. So this counts raw name mentions across the graph before
+    /// resolution — every callee name, implemented trait, imported item,
+    /// parameter and return type, and every word of prose — attributing
+    /// each to the node that wrote it and skipping the node's own name, so
+    /// a symbol does not mention itself into life.
+    ///
+    /// Keyed by short name, not by id: an unresolved mention is *only* a
+    /// name, which is what makes it unresolved. Two symbols sharing a short
+    /// name therefore share a count, and the error is one-directional — a
+    /// dead `open` is hidden by a live `open` elsewhere, never the reverse.
+    /// That is the right way to be wrong for a list of candidates.
+    name_mentions: HashMap<&'a str, u32>,
     /// Whether this graph was written by a build that records comment
     /// metrics. A graph older than that answers "how many functions have
     /// comments" with zero, which is worse than refusing.
@@ -96,6 +122,22 @@ impl<'a> FactContext<'a> {
             *in_degree.entry(&e.target).or_insert(0) += 1;
             *out_degree.entry(&e.source).or_insert(0) += 1;
         }
+        // Same borrowing discipline as the degree maps above: every key is
+        // a subslice of a node field, so a pass over ~5.7k nodes allocates
+        // only the map itself.
+        let mut name_mentions: HashMap<&'a str, u32> = HashMap::new();
+        let mut scratch: Vec<&'a str> = Vec::new();
+        for n in &graph.nodes {
+            let own = short_name(&n.name);
+            scratch.clear();
+            collect_mentions(n, &mut scratch);
+            for m in &scratch {
+                if !m.is_empty() && *m != own {
+                    *name_mentions.entry(m).or_insert(0) += 1;
+                }
+            }
+        }
+
         let schema = graph
             .stats
             .as_ref()
@@ -105,6 +147,7 @@ impl<'a> FactContext<'a> {
             in_degree,
             out_degree,
             members,
+            name_mentions,
             has_line_metrics: schema >= 2,
             has_boundaries: schema >= 4,
         }
@@ -275,6 +318,94 @@ pub(crate) fn classification_str(c: &FileClassification) -> &'static str {
     }
 }
 
+/// True for the characters an identifier is made of, in every language the
+/// indexer reads. `$` earns its place for JS.
+fn is_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '$'
+}
+
+/// The last identifier in a possibly-qualified name.
+///
+/// `Db::open_inner` → `open_inner`, `obj.method` → `method`,
+/// `[Symbol.iterator]` → `iterator`. Trailing punctuation is trimmed
+/// rather than split on, because a JS computed-member definition ends in
+/// `]` and splitting alone would key it under `iterator]`, which nothing
+/// would ever mention.
+///
+/// Qualifiers are dropped on both sides of the comparison: a call is
+/// recorded as whatever the source wrote (`self.foo`, `Type::foo`, `foo`),
+/// and matching those to a definition is exactly the resolution step that
+/// has already failed by the time this matters.
+fn short_name(name: &str) -> &str {
+    let Some((end, c)) = name.char_indices().rev().find(|(_, c)| is_ident_char(*c)) else {
+        return "";
+    };
+    let end = end + c.len_utf8();
+    let start = name[..end]
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_ident_char(*c))
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    &name[start..end]
+}
+
+/// Push every identifier-shaped run in `text` onto `out`.
+///
+/// Walks `char_indices` rather than bytes: doc comments in this repo
+/// contain `×`, `→` and em dashes, and stepping a non-identifier byte at a
+/// time lands inside one of them and panics.
+fn push_identifiers<'a>(text: &'a str, out: &mut Vec<&'a str>) {
+    let mut run: Option<usize> = None;
+    for (i, c) in text.char_indices() {
+        match (is_ident_char(c), run) {
+            (true, None) => run = Some(i),
+            (false, Some(start)) => {
+                out.push(&text[start..i]);
+                run = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(start) = run {
+        out.push(&text[start..]);
+    }
+}
+
+/// Every name this one node writes down, whatever the resolver made of it.
+///
+/// Prose counts. A symbol whose doc comment is the last thing in the repo
+/// that names it is still forgotten code, but a symbol another symbol's
+/// doc comment explains is not — and telling those apart is the whole
+/// point of a candidate list someone has to read.
+fn collect_mentions<'a>(n: &'a GraphNode, out: &mut Vec<&'a str>) {
+    for c in n.calls.iter().chain(&n.implements).chain(&n.extends) {
+        out.push(short_name(c));
+    }
+    for im in &n.imports {
+        for item in &im.imported {
+            out.push(short_name(&item.name));
+            if let Some(alias) = &item.alias {
+                out.push(short_name(alias));
+            }
+        }
+    }
+    if let Some(sig) = &n.signature {
+        for p in &sig.params {
+            push_identifiers(&p.name, out);
+            if let Some(t) = &p.param_type {
+                push_identifiers(t, out);
+            }
+        }
+        if let Some(r) = &sig.return_type {
+            push_identifiers(r, out);
+        }
+    }
+    if let Some(doc) = &n.docstring {
+        push_identifiers(doc, out);
+    }
+}
+
 /// Parent directory of a repo-relative file path, `""` for a file at the
 /// repo root. Used to group statistics by module without a query-time
 /// string function.
@@ -376,6 +507,21 @@ pub fn compute(n: &GraphNode, ctx: &FactContext) -> Facts {
         "out_degree".into(),
         FactValue::Int(ctx.out_degree.get(n.id.as_str()).copied().unwrap_or(0) as i64),
     );
+
+    // Only for symbols. A File or Folder node's `name` is a path, whose
+    // last identifier is an extension (`rs`), and counting how often the
+    // word "rs" appears would be noise wearing a fact's clothes.
+    if !matches!(n.node_type, GraphNodeType::File | GraphNodeType::Folder) {
+        f.insert(
+            "name_mentions".into(),
+            FactValue::Int(
+                ctx.name_mentions
+                    .get(short_name(&n.name))
+                    .copied()
+                    .unwrap_or(0) as i64,
+            ),
+        );
+    }
 
     if let Some(q) = n.qualified_name.as_deref().filter(|s| !s.is_empty()) {
         f.insert("qualified_name".into(), FactValue::Str(q.to_string()));
@@ -1060,5 +1206,130 @@ mod tests {
         let f = compute(&n, &ctx_of(vec![]));
         assert!(!f.contains_key("folder"));
         assert!(!f.contains_key("is_test"));
+    }
+
+
+    /// A context from a graph that actually has nodes, which is what
+    /// `name_mentions` is derived from.
+    fn ctx_of_nodes(nodes: Vec<GraphNode>) -> FactContext<'static> {
+        let g: &'static GraphData = Box::leak(Box::new(GraphData {
+            nodes,
+            edges: vec![],
+            stats: None,
+            resolution: None,
+        }));
+        FactContext::new(g)
+    }
+
+    /// The point of the fact. `render` is called by `draw`, but the
+    /// resolver could not place the callee, so no edge exists and
+    /// `in_degree` is 0. The raw name is still sitting in `draw.calls`,
+    /// and that is the difference between unresolved and unused.
+    #[test]
+    fn an_unresolved_call_still_counts_as_a_mention() {
+        let mut caller = node("draw", Some("src/a.rs"));
+        caller.calls = vec!["render".into()];
+        let target = node("render", Some("src/b.rs"));
+
+        let ctx = ctx_of_nodes(vec![caller, target.clone()]);
+        assert_eq!(compute(&target, &ctx)["in_degree"], FactValue::Int(0));
+        assert_eq!(compute(&target, &ctx)["name_mentions"], FactValue::Int(1));
+    }
+
+    /// Qualifiers are dropped on both sides: the source wrote
+    /// `self.open(..)` or `Db::open(..)`, and matching that to a
+    /// definition is the resolution step that has already failed.
+    #[test]
+    fn a_qualified_call_matches_the_short_definition_name() {
+        for spelling in ["self.open", "Db::open", "open", "[Symbol.open]"] {
+            let mut caller = node("run", Some("src/a.rs"));
+            caller.calls = vec![spelling.into()];
+            let target = node("Db::open", Some("src/b.rs"));
+
+            let ctx = ctx_of_nodes(vec![caller, target.clone()]);
+            assert_eq!(
+                compute(&target, &ctx)["name_mentions"],
+                FactValue::Int(1),
+                "{spelling} should reach Db::open"
+            );
+        }
+    }
+
+    /// Otherwise every recursive function, and every symbol whose own doc
+    /// comment names it, would mention itself out of the candidate list.
+    #[test]
+    fn a_symbol_never_mentions_itself_into_life() {
+        let mut n = node("recurse", Some("src/a.rs"));
+        n.calls = vec!["recurse".into()];
+        n.docstring = Some("`recurse` recurses.".into());
+
+        let ctx = ctx_of_nodes(vec![n.clone()]);
+        assert_eq!(compute(&n, &ctx)["name_mentions"], FactValue::Int(0));
+    }
+
+    /// A `serde` payload is never *called*; it appears as somebody's
+    /// parameter or return type and arrives deserialised. Reading
+    /// signatures is what keeps those off the list.
+    #[test]
+    fn a_type_named_only_in_a_signature_is_mentioned() {
+        let mut user = node("handler", Some("src/a.rs"));
+        user.signature = Some(crate::types::GraphNodeSignature {
+            params: vec![crate::types::Param {
+                name: "body".into(),
+                param_type: Some("Json<SearchArgs>".into()),
+                optional: false,
+                default: None,
+            }],
+            return_type: Some("Result<Reply, Error>".into()),
+        });
+        let args = node("SearchArgs", Some("src/b.rs"));
+        let reply = node("Reply", Some("src/b.rs"));
+        let unrelated = node("Unmentioned", Some("src/b.rs"));
+
+        let ctx = ctx_of_nodes(vec![user, args.clone(), reply.clone(), unrelated.clone()]);
+        assert_eq!(compute(&args, &ctx)["name_mentions"], FactValue::Int(1));
+        assert_eq!(compute(&reply, &ctx)["name_mentions"], FactValue::Int(1));
+        assert_eq!(compute(&unrelated, &ctx)["name_mentions"], FactValue::Int(0));
+    }
+
+    /// Prose counts. A symbol another symbol's doc comment explains is
+    /// not forgotten code, and the list exists to be read by someone who
+    /// then has to decide.
+    #[test]
+    fn a_name_that_survives_only_in_prose_is_mentioned() {
+        let mut explainer = node("caller", Some("src/a.rs"));
+        explainer.docstring = Some("Superseded by `fast_path`; see the note.".into());
+        let target = node("fast_path", Some("src/b.rs"));
+
+        let ctx = ctx_of_nodes(vec![explainer, target.clone()]);
+        assert_eq!(compute(&target, &ctx)["name_mentions"], FactValue::Int(1));
+    }
+
+    /// Doc comments in this repository contain `×`, `→` and em dashes.
+    /// Walking the prose a byte at a time to find identifier runs lands
+    /// inside one of them and panics, which is how this was found.
+    #[test]
+    fn multibyte_prose_does_not_split_a_char() {
+        let mut explainer = node("caller", Some("src/a.rs"));
+        explainer.docstring = Some("rust×150 — files → target_fn, ≈2×".into());
+        let target = node("target_fn", Some("src/b.rs"));
+
+        let ctx = ctx_of_nodes(vec![explainer, target.clone()]);
+        assert_eq!(compute(&target, &ctx)["name_mentions"], FactValue::Int(1));
+    }
+
+    /// A File node's `name` is a path, whose last identifier is an
+    /// extension. Counting how often the word `rs` appears is noise
+    /// wearing a fact's clothes, so the fact is absent rather than wrong.
+    #[test]
+    fn containers_carry_no_name_mentions() {
+        for t in [GraphNodeType::File, GraphNodeType::Folder] {
+            let mut n = node("src/a.rs", Some("src/a.rs"));
+            n.node_type = t;
+            assert!(!compute(&n, &ctx_of_nodes(vec![])).contains_key("name_mentions"));
+        }
+
+        let n = node("f", Some("src/a.rs"));
+        assert!(compute(&n, &ctx_of_nodes(vec![])).contains_key("name_mentions"));
     }
 }

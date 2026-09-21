@@ -486,14 +486,35 @@ pub static BUILTIN: &[Preset] = &[
     // `in_degree` counts resolved structural edges only. A symbol reached
     // by dynamic dispatch, reflection, or a string-keyed lookup has an
     // in-degree of zero and is not dead. These presets find *candidates*.
+    //
+    // On its own that made `dead_code` almost pure noise. Every candidate
+    // it produced on this repository was checked by hand: 462 rows, 8 of
+    // them dead. 1.7% of the list was worth reading, and those eight sat
+    // underneath 454 trait methods reached through `dyn`, handlers named
+    // in a `.route()` table, `serde` payloads that only ever arrive
+    // deserialised, and JS functions called as `obj.method()`.
+    //
+    // `name_mentions = 0` is what makes it readable: it asks whether
+    // anything in the repo still writes the name down, resolved or not,
+    // which is the question in-degree was standing in for. Same eight
+    // found, 111 rows instead of 462. Both conjuncts are needed —
+    // `name_mentions` alone clears any symbol whose short name collides
+    // with a live one, and `in_degree` alone is the 1.7%.
+    //
+    // `Constant` is in the node-type list because a dead `pub const` was
+    // invisible to the old one; `Variable` is not, because it is JS
+    // module state, which this indexer draws no `Uses` edges for — it
+    // added 78 rows and not one true positive. See
+    // `docs/dev/DEAD-CODE-AUDIT.md` for the audit and what still gets
+    // through.
     Preset {
         name: "dead_code",
         category: Category::DeadCode,
-        description: "Non-test symbols nothing resolves an edge to. Candidates, not proof — dynamic dispatch is invisible here.",
+        description: "Non-test symbols nothing resolves an edge to AND nothing mentions by name. Candidates, not proof — a name built at runtime is invisible here.",
         params: NO_PARAMS,
         gql: "MATCH (n) \
-              WHERE n.in_degree = 0 AND n.is_test = 0 \
-                AND n.node_type IN ['Function', 'Class', 'Interface'] \
+              WHERE n.in_degree = 0 AND n.name_mentions = 0 AND n.is_test = 0 \
+                AND n.node_type IN ['Function', 'Class', 'Interface', 'Constant'] \
               RETURN elementKey(n) AS id, n.loc AS loc \
               ORDER BY loc DESC \
               LIMIT 200",

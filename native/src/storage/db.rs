@@ -632,7 +632,8 @@ impl Db {
         use overgraph::{SecondaryIndexField, SecondaryIndexSpec};
 
         const EQUALITY: &[&str] = &["node_type", "is_test", "folder", "has_doc", "boundary"];
-        const RANGE: &[&str] = &["loc", "in_degree", "out_degree", "params", "max_nesting"];
+        const RANGE: &[&str] =
+            &["loc", "in_degree", "out_degree", "name_mentions", "params", "max_nesting"];
 
         for label in ALL_NODE_LABELS {
             for key in EQUALITY {

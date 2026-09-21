@@ -40,6 +40,14 @@ struct Sym {
     has_doc: i64,
     is_test: i64,
     in_degree: i64,
+    /// Raw mentions of this symbol's name anywhere in the graph, resolved
+    /// or not. `None` means the fact is absent, which is what a File node
+    /// looks like — `facts::compute` writes it for symbols only.
+    ///
+    /// The point of carrying it here is that `in_degree` and
+    /// `name_mentions` can disagree, and `dead_code` is the preset that
+    /// lives in the gap: see `dispatched` below.
+    name_mentions: Option<i64>,
     /// Declared members, for types in languages that nest them. `None`
     /// means the fact is absent — which is what a Rust struct looks like,
     /// and what `classes_by_members` has to tolerate.
@@ -78,16 +86,20 @@ const DB_OUT: Bnd = Bnd {
 /// A miniature repo: two source folders, one test folder, a documented
 /// core symbol everything depends on, and one symbol nothing calls.
 const SYMBOLS: &[Sym] = &[
-    Sym { id: "function:src/core/auth.rs:verify", node_type: "Function", file: "src/core/auth.rs", loc: 120, code_lines: 90, comment_lines: 20, doc_lines: 4, has_doc: 1, is_test: 0, in_degree: 3, members: None, boundary: Some(DB_OUT) },
-    Sym { id: "function:src/core/auth.rs:hash",   node_type: "Function", file: "src/core/auth.rs", loc: 18,  code_lines: 15, comment_lines: 0,  doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 1, members: None, boundary: None },
+    Sym { id: "function:src/core/auth.rs:verify", node_type: "Function", file: "src/core/auth.rs", loc: 120, code_lines: 90, comment_lines: 20, doc_lines: 4, has_doc: 1, is_test: 0, in_degree: 3, name_mentions: Some(5), members: None, boundary: Some(DB_OUT) },
+    Sym { id: "function:src/core/auth.rs:hash",   node_type: "Function", file: "src/core/auth.rs", loc: 18,  code_lines: 15, comment_lines: 0,  doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 1, name_mentions: Some(2), members: None, boundary: None },
     // Commented but undocumented — the case that separates `has_comments`
     // from `has_doc`.
-    Sym { id: "function:src/api/login.rs:handle", node_type: "Function", file: "src/api/login.rs", loc: 64,  code_lines: 48, comment_lines: 11, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 1, members: None, boundary: Some(HTTP_IN) },
-    Sym { id: "function:src/api/login.rs:unused", node_type: "Function", file: "src/api/login.rs", loc: 9,   code_lines: 7,  comment_lines: 0,  doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, members: None, boundary: None },
-    Sym { id: "class:src/core/auth.rs:Session",   node_type: "Class",    file: "src/core/auth.rs", loc: 200, code_lines: 150, comment_lines: 30, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 2, members: Some(7), boundary: None },
-    Sym { id: "function:tests/auth_test.rs:t_verify", node_type: "Function", file: "tests/auth_test.rs", loc: 25, code_lines: 22, comment_lines: 1, doc_lines: 0, has_doc: 0, is_test: 1, in_degree: 0, members: None, boundary: None },
-    Sym { id: "file:src/core/auth.rs", node_type: "File", file: "src/core/auth.rs", loc: 400, code_lines: 300, comment_lines: 60, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 2, members: None, boundary: None },
-    Sym { id: "file:src/api/login.rs", node_type: "File", file: "src/api/login.rs", loc: 90,  code_lines: 70, comment_lines: 12, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, members: None, boundary: None },
+    Sym { id: "function:src/api/login.rs:handle", node_type: "Function", file: "src/api/login.rs", loc: 64,  code_lines: 48, comment_lines: 11, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 1, name_mentions: Some(1), members: None, boundary: Some(HTTP_IN) },
+    Sym { id: "function:src/api/login.rs:unused", node_type: "Function", file: "src/api/login.rs", loc: 9,   code_lines: 7,  comment_lines: 0,  doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, name_mentions: Some(0), members: None, boundary: None },
+    Sym { id: "class:src/core/auth.rs:Session",   node_type: "Class",    file: "src/core/auth.rs", loc: 200, code_lines: 150, comment_lines: 30, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 2, name_mentions: Some(6), members: Some(7), boundary: None },
+    // Nothing resolves an edge to it, but four other symbols still write
+    // its name down — a trait method reached through `dyn`, a handler in a
+    // `.route()` table, a `serde` payload. `dead_code` must not list it.
+    Sym { id: "function:src/api/login.rs:dispatched", node_type: "Function", file: "src/api/login.rs", loc: 12, code_lines: 10, comment_lines: 0, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, name_mentions: Some(4), members: None, boundary: None },
+    Sym { id: "function:tests/auth_test.rs:t_verify", node_type: "Function", file: "tests/auth_test.rs", loc: 25, code_lines: 22, comment_lines: 1, doc_lines: 0, has_doc: 0, is_test: 1, in_degree: 0, name_mentions: Some(0), members: None, boundary: None },
+    Sym { id: "file:src/core/auth.rs", node_type: "File", file: "src/core/auth.rs", loc: 400, code_lines: 300, comment_lines: 60, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 2, name_mentions: None, members: None, boundary: None },
+    Sym { id: "file:src/api/login.rs", node_type: "File", file: "src/api/login.rs", loc: 90,  code_lines: 70, comment_lines: 12, doc_lines: 0, has_doc: 0, is_test: 0, in_degree: 0, name_mentions: None, members: None, boundary: None },
 ];
 
 const EDGES: &[(&str, &str, &str)] = &[
@@ -147,6 +159,11 @@ async fn seeded_store(tmp: &TempDir) -> Db {
                             ),
                         ),
                     ]);
+                    // Symbols only, like `facts::compute` — a File node's name
+                    // is a path, whose last identifier is an extension.
+                    if let Some(m) = s.name_mentions {
+                        f.insert("name_mentions".into(), FactValue::Int(m));
+                    }
                     // Absent on purpose for everything but the one type
                     // that declares members — see `Sym::members`.
                     if let Some(m) = s.members {
@@ -305,6 +322,33 @@ async fn a_preset_returns_the_right_answer_not_just_a_number() {
     assert_eq!(
         ids[0],
         &QueryValue::Str("function:src/core/auth.rs:verify".into())
+    );
+}
+
+/// The conjunct that makes `dead_code` readable.
+///
+/// `unused` and `dispatched` both have an in-degree of zero, because the
+/// resolver drew no edge to either. Only `unused` is dead; four other
+/// symbols still write `dispatched`'s name down. In the real index that
+/// distinction is the difference between 462 candidates and 111.
+#[tokio::test]
+async fn dead_code_skips_a_symbol_whose_name_is_still_mentioned() {
+    let tmp = TempDir::new().unwrap();
+    let db = seeded_store(&tmp).await;
+
+    let answer = analyze::run(&db, &params("dead_code")).await.unwrap();
+    let ids: Vec<&QueryValue> = answer.page.rows.iter().filter_map(|r| r.first()).collect();
+
+    assert_eq!(
+        ids,
+        vec![&QueryValue::Str("function:src/api/login.rs:unused".into())],
+        "{:?}",
+        answer.page.rows
+    );
+    assert!(
+        answer.unindexed.is_empty(),
+        "name_mentions must be a stored fact, not a confident zero: {:?}",
+        answer.unindexed
     );
 }
 
