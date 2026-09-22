@@ -580,3 +580,79 @@ caveat that both told the caller to throw it away.
 | A `tests_per_source` ratio for `test_ratio` | Divides by zero on a folder that is all tests, and OverGraph refuses the query. Percentage of all functions instead. |
 | Reuse the query's full `WHERE` as the coverage denominator | Reports `has_doc 100%` for `where_to_start`, which filters on `has_doc`. The denominator has to be a node set, not a filtered set. |
 | `MATCH (n:Class|Interface)` to make label-scoped coverage cover more presets | The engine has no label union; `:Class:Interface` parses as a conjunction and returns 0. |
+
+---
+
+# Follow-up — 2026-09-22
+
+## `orphan_files` listed `native/src/chat_eval.rs`, and it should not have
+
+Reported from the output, which is the right way to find these.
+
+The row was true about the graph and false about the repo.
+`native/src/lib.rs:38` reads:
+
+```rust
+#[cfg(test)]
+mod chat_eval;
+```
+
+So every line of `chat_eval.rs` is test code — three `#[ignore]`d `#[test]`
+functions and their helpers — and `orphan_files` says in its own description
+that it **excludes tests**. It listed one as unreachable *production* code.
+
+**Why `is_test` missed it.** `is_test_node` has three signals: a test
+annotation on the symbol, the file's `classification`, then path markers. The
+file's helpers carry no `#[test]`; `native/src/chat_eval.rs` matches no path
+marker; and the classifier, which only sees one file at a time, had no
+opinion. The gate is in a **different file**, and nothing the per-file indexer
+reads while parsing `chat_eval.rs` can tell.
+
+Round 1 widened the path markers (`/tests.`, `/test.`) for the same class of
+miss. That was a name-based fix and this file is not named for tests, so it
+could never have been caught that way.
+
+**Fix.** The same shape `dispatch_bindings` already uses for route tables —
+record the half you can see, spend it once every file is in hand:
+
+1. `rust.rs` records bodiless `#[cfg(test)] mod x;` declarations
+   (`ChildModule { name, test_only }`). The `declared_child_modules` walk
+   already existed for scope resolution and was discarding the attribute.
+2. `FileNode::test_only_modules` carries them.
+3. `indexer::mark_test_only_modules` resolves each to a path the way rustc
+   does — a module root (`lib.rs`/`main.rs`/`mod.rs`) declares siblings, any
+   other file owns a directory named after its stem — and sets that file's
+   `classification = Test`. Transitive, via a worklist, so order does not
+   matter and a test-only module's own children are covered.
+
+`classification` rather than `is_test` directly, because it is the one signal
+that already reaches everything: `graph::build` stamps a file's classification
+onto every symbol in it, and `is_test_node` prefers the classifier over the
+filename guess. One assignment, and `ug context`, the analyze presets and the
+stored fact all agree.
+
+Result: all 17 symbols in `chat_eval.rs` now read `is_test = 1`, and
+`orphan_files` returns 7 rows. Every one is an entry point or a module root —
+`build.rs`, `lib.rs`, `main.rs`, two `mod.rs`, `bin/ug_app.rs`, and
+`demos/wllama-chat/app.js`, which `index.html` loads and no indexer reads.
+
+## And the bump that made the fix work
+
+The first verification showed **no change**. The fix was correct; it was inert.
+
+`ug gen` is incremental. `lib.rs` had not changed, so its `FileNode` came from
+`indexed-tree.json` — written before `test_only_modules` existed, so it
+deserialized empty and the gate was never seen. `INDEXER_VERSION` is what
+drops that cache, and it had not been bumped.
+
+**The same was true of round 2's Python docstring fix and was not noticed.**
+`GRAPH_SCHEMA_VERSION` was bumped to 8, which tells a *reader* the graph is
+old; it does not invalidate anything. On an existing install, `ug gen` after
+the upgrade would have fixed Python docstrings only in files someone happened
+to edit — precisely the failure mode `INDEXER_VERSION` 6 and 7 were bumped
+for. Both are covered by the bump to 8.
+
+The rule, now in the constant's doc comment: **bump `INDEXER_VERSION` whenever
+a field on `FileNode` or `Symbol` starts being *populated*, not only when its
+shape changes.** The two versions answer different questions and only one of
+them makes a fix take effect.

@@ -125,6 +125,7 @@ pub fn process_document(path: &Path, repo_root: Option<&str>) -> Option<FileNode
         imports: Vec::new(),
         exports: Vec::new(),
         dispatch_bindings: Vec::new(),
+        test_only_modules: Vec::new(),
         module_refs: Default::default(),
     })
 }

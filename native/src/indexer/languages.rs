@@ -79,6 +79,28 @@ pub trait LanguageIndexer: Send + Sync {
         Vec::new()
     }
 
+    /// Names of child modules this file declares as **test-only**, where
+    /// the module's code lives in a different file.
+    ///
+    /// Rust's `#[cfg(test)] mod chat_eval;` puts the gate in the *parent*
+    /// file and the code in `chat_eval.rs`, so nothing the per-file
+    /// indexer sees while reading `chat_eval.rs` can tell it is test code.
+    /// It had no test-shaped path and no `#[test]` on its helpers, so
+    /// `is_test` read 0 for all of them and `orphan_files` listed the file
+    /// as unreachable production code — true, and not what the preset
+    /// promises.
+    ///
+    /// Same shape and same reason as [`Self::extract_dispatch_bindings`]:
+    /// the two halves live in different files, so the declaration is
+    /// recorded here and spent once every file is in hand — see
+    /// [`crate::indexer::mark_test_only_modules`].
+    ///
+    /// Defaults to none. No other language this indexer handles can gate a
+    /// whole separate file from outside it.
+    fn test_only_child_modules(&self, _source: &[u8], _root: Node) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Calls and value references written at module scope, outside any
     /// symbol this indexer emits.
     ///

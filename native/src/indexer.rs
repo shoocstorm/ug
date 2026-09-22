@@ -77,7 +77,21 @@ use tree_sitter::Parser;
 /// touch. Rust value references also keep their bare name when no import
 /// resolves them, which is what makes a glob-imported handler reachable at
 /// all; that too is cached per file.
-const INDEXER_VERSION: &str = "7";
+/// 8: two per-file facts a cached `FileNode` cannot have.
+/// `FileNode::test_only_modules` is new and deserializes empty, so a
+/// `#[cfg(test)] mod x;` in an unchanged `lib.rs` would never mark `x.rs`
+/// — which is how the need for this bump was found, after the fix looked
+/// inert against an existing index. `Symbol::docstring` is the same shape
+/// one level down: Python docstrings are extracted for the first time, and
+/// every cached Python symbol carries the `None` the old JSDoc-only
+/// scanner produced, so `doc_coverage` would keep answering 0% for every
+/// file nobody happened to edit.
+///
+/// The rule the two share: **bump this whenever a field on `FileNode` or
+/// `Symbol` starts being *populated*, not only when its shape changes.**
+/// `GRAPH_SCHEMA_VERSION` tells a reader what to trust; only this
+/// invalidates the cache that would otherwise keep serving the old value.
+const INDEXER_VERSION: &str = "8";
 
 /// Reserved key in `cache.json`. Prefixed and suffixed so it cannot collide
 /// with a repo-relative path.
@@ -184,8 +198,104 @@ fn process_file_content(
         // placed once every file is in hand. Carried on the FileNode until
         // then.
         dispatch_bindings: indexer.extract_dispatch_bindings(source, root),
+        // Same reason, one file further away: `#[cfg(test)] mod x;` gates a
+        // file it does not contain. Spent by `mark_test_only_modules`.
+        test_only_modules: indexer.test_only_child_modules(source, root),
         module_refs,
     })
+}
+
+/// Mark files that a *different* file declared test-only.
+///
+/// Rust can gate a whole module from outside it — `#[cfg(test)] mod
+/// chat_eval;` in `lib.rs` makes every line of `chat_eval.rs` test code —
+/// and nothing the per-file indexer sees while reading `chat_eval.rs` can
+/// tell. That file had no test-shaped path and its helpers carry no
+/// `#[test]`, so `is_test` read 0 for all thirteen of them and
+/// `orphan_files` listed it as unreachable *production* code: true about
+/// the graph, and the opposite of what the preset promises.
+///
+/// Sets `classification = Test` rather than touching `is_test` directly,
+/// because that is the one signal that already reaches everything —
+/// `graph::build` stamps a file's classification onto every symbol in it,
+/// and `facts::is_test_node` prefers the classifier over the filename
+/// guess. One assignment, and `ug context`, the analyze presets and the
+/// stored fact all agree.
+///
+/// Transitive: a test-only module may declare its own children, and they
+/// are test-only too. The worklist also means declaration order does not
+/// matter.
+///
+/// A classification the file already has is left alone. The classifier
+/// looked at the contents; this only knows what the parent said, and an
+/// explicit `Documentation` (a `.md` reached somehow) should not become a
+/// test.
+fn mark_test_only_modules(files: &mut [FileNode]) {
+    use std::collections::{HashMap, HashSet};
+
+    // Resolve `mod x;` declared in `f` the way rustc does: a file that is
+    // itself a module root (`lib.rs`, `main.rs`, `mod.rs`) looks for its
+    // siblings; any other file owns a directory named after its stem.
+    let candidates = |declarer: &str, name: &str| -> [String; 2] {
+        let (dir, stem) = match declarer.rsplit_once('/') {
+            Some((d, f)) => (d.to_string(), f),
+            None => (String::new(), declarer),
+        };
+        let base = match stem.trim_end_matches(".rs") {
+            "lib" | "main" | "mod" => dir,
+            own => {
+                if dir.is_empty() {
+                    own.to_string()
+                } else {
+                    format!("{dir}/{own}")
+                }
+            }
+        };
+        let prefix = if base.is_empty() {
+            String::new()
+        } else {
+            format!("{base}/")
+        };
+        [format!("{prefix}{name}.rs"), format!("{prefix}{name}/mod.rs")]
+    };
+
+    // Owned keys: the loop below assigns into `files`, so the index cannot
+    // borrow from it.
+    let index: HashMap<String, usize> = files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.path.clone(), i))
+        .collect();
+
+    let declared = |files: &[FileNode], i: usize| -> Vec<usize> {
+        files[i]
+            .test_only_modules
+            .iter()
+            .flat_map(|name| candidates(&files[i].path, name))
+            .filter_map(|cand| index.get(&cand).copied())
+            .collect()
+    };
+
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut queue: Vec<usize> = Vec::new();
+    for i in 0..files.len() {
+        for target in declared(files, i) {
+            if seen.insert(target) {
+                queue.push(target);
+            }
+        }
+    }
+
+    while let Some(i) = queue.pop() {
+        if files[i].classification.is_none() {
+            files[i].classification = Some(crate::types::FileClassification::Test);
+        }
+        for target in declared(files, i) {
+            if seen.insert(target) {
+                queue.push(target);
+            }
+        }
+    }
 }
 
 /// Fill the comment/doc/code line counts on every symbol in one file.
@@ -345,6 +455,8 @@ pub fn index_typed(path: String) -> IndexResult {
         crate::C_GREEN,
         crate::C_RESET
     );
+
+    mark_test_only_modules(&mut files);
 
     let folders = folder::extract_folders_relative(&repo_root);
 
@@ -540,7 +652,7 @@ pub fn index_with_cache_typed(path: String, cache_path: String) -> IndexResult {
         by_index.push((i, fnode));
     }
     by_index.sort_by_key(|(i, _)| *i);
-    let files: Vec<FileNode> = by_index.into_iter().map(|(_, f)| f).collect();
+    let mut files: Vec<FileNode> = by_index.into_iter().map(|(_, f)| f).collect();
 
     println!(
         "\r{}▸{} Indexing: {}100.0% ({}/{}){} {}✓ done{} ({} cached)",
@@ -560,6 +672,8 @@ pub fn index_with_cache_typed(path: String, cache_path: String) -> IndexResult {
     if let Ok(json) = serde_json::to_string(&new_hashes) {
         let _ = fs::write(&cache_file, json);
     }
+
+    mark_test_only_modules(&mut files);
 
     let folders = folder::extract_folders_relative(&repo_root);
 
@@ -614,4 +728,117 @@ pub(crate) fn write_json_file_checked<T: serde::Serialize>(
     let mut w = std::io::BufWriter::new(file);
     serde_json::to_writer(&mut w, value).map_err(|e| e.to_string())?;
     std::io::Write::flush(&mut w).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod test_only_module_tests {
+    use super::*;
+    use crate::types::FileClassification;
+
+    fn file(path: &str, declares: &[&str]) -> FileNode {
+        FileNode {
+            path: path.to_string(),
+            hash: String::new(),
+            language: "rust".into(),
+            classification: None,
+            symbols: Vec::new(),
+            lines: 0,
+            imports: Vec::new(),
+            exports: Vec::new(),
+            dispatch_bindings: Vec::new(),
+            test_only_modules: declares.iter().map(|s| s.to_string()).collect(),
+            module_refs: Default::default(),
+        }
+    }
+
+    fn classification_of(files: &[FileNode], path: &str) -> Option<FileClassification> {
+        files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("no file {path}"))
+            .classification
+            .clone()
+    }
+
+    /// The case that produced a wrong `orphan_files` row: the gate is in
+    /// `lib.rs` and the code is in `chat_eval.rs`, so nothing the per-file
+    /// indexer reads while parsing `chat_eval.rs` can tell it is a test.
+    #[test]
+    fn a_cfg_test_mod_marks_the_file_it_names() {
+        let mut files = vec![
+            file("native/src/lib.rs", &["chat_eval"]),
+            file("native/src/chat_eval.rs", &[]),
+            file("native/src/chat.rs", &[]),
+        ];
+        mark_test_only_modules(&mut files);
+        assert_eq!(
+            classification_of(&files, "native/src/chat_eval.rs"),
+            Some(FileClassification::Test)
+        );
+        assert_eq!(
+            classification_of(&files, "native/src/chat.rs"),
+            None,
+            "an ungated sibling is untouched"
+        );
+    }
+
+    /// `mod x;` resolves differently depending on whether the declaring
+    /// file is a module root. Getting this backwards marks the wrong file,
+    /// or silently nothing.
+    #[test]
+    fn a_module_root_looks_at_siblings_and_any_other_file_owns_a_directory() {
+        let mut files = vec![
+            // lib/main/mod.rs declare siblings…
+            file("src/lib.rs", &["helper"]),
+            file("src/helper.rs", &[]),
+            // …while src/cli.rs owns src/cli/.
+            file("src/cli.rs", &["fixtures"]),
+            file("src/cli/fixtures.rs", &[]),
+            // and the directory form resolves too.
+            file("src/serve.rs", &["harness"]),
+            file("src/serve/harness/mod.rs", &[]),
+        ];
+        mark_test_only_modules(&mut files);
+        for marked in [
+            "src/helper.rs",
+            "src/cli/fixtures.rs",
+            "src/serve/harness/mod.rs",
+        ] {
+            assert_eq!(
+                classification_of(&files, marked),
+                Some(FileClassification::Test),
+                "{marked}"
+            );
+        }
+    }
+
+    /// A test-only module's own children are test-only, however the files
+    /// happen to be ordered.
+    #[test]
+    fn the_marking_is_transitive_and_order_independent() {
+        let mut files = vec![
+            file("src/eval/deep.rs", &[]),
+            file("src/eval.rs", &["deep"]),
+            file("src/lib.rs", &["eval"]),
+        ];
+        mark_test_only_modules(&mut files);
+        assert_eq!(
+            classification_of(&files, "src/eval/deep.rs"),
+            Some(FileClassification::Test),
+            "reached through a file that is itself only reached by the gate"
+        );
+    }
+
+    /// The classifier looked at the contents; this only knows what the
+    /// parent said. An opinion already formed wins.
+    #[test]
+    fn an_existing_classification_is_left_alone() {
+        let mut files = vec![file("src/lib.rs", &["notes"]), file("src/notes.rs", &[])];
+        files[1].classification = Some(FileClassification::Documentation);
+        mark_test_only_modules(&mut files);
+        assert_eq!(
+            classification_of(&files, "src/notes.rs"),
+            Some(FileClassification::Documentation)
+        );
+    }
 }

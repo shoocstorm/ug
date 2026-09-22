@@ -68,8 +68,8 @@ impl LanguageIndexer for RustIndexer {
         // `mod cli;` is not an import, so it is deliberately absent from
         // `ImportInfo` — but it is still a name binding, and the only one
         // that makes `cli::run()` in this file mean `crate::cli::run`.
-        for name in declared_child_modules(root, source) {
-            scope.declare_child_module(&name);
+        for m in declared_child_modules(root, source) {
+            scope.declare_child_module(&m.name);
         }
         let walk = Ctx {
             fields: collect_struct_fields(root, source),
@@ -87,6 +87,14 @@ impl LanguageIndexer for RustIndexer {
         let mut out = Vec::new();
         collect_dispatch_bindings(root, source, &mut out);
         out
+    }
+
+    fn test_only_child_modules(&self, source: &[u8], root: Node) -> Vec<String> {
+        declared_child_modules(root, source)
+            .into_iter()
+            .filter(|m| m.test_only)
+            .map(|m| m.name)
+            .collect()
     }
 }
 
@@ -1764,22 +1772,39 @@ fn extract_trait_bounds(node: &Node, source: &[u8]) -> Vec<String> {
 /// `mod` declaration is a name binding, not an import, and feeding it through
 /// `ImportInfo` would also mint a file-to-file import edge and possibly an
 /// external-dependency node for something that is neither.
-fn declared_child_modules(root: Node, source: &[u8]) -> Vec<String> {
+fn declared_child_modules(root: Node, source: &[u8]) -> Vec<ChildModule> {
     let mut out = Vec::new();
-    walk_for_child_modules(root, source, &mut out);
+    walk_for_child_modules(root, source, false, &mut out);
     out
 }
 
-fn walk_for_child_modules(node: Node, source: &[u8], out: &mut Vec<String>) {
+/// A `mod x;` declaration, and whether it is gated behind `#[cfg(test)]`.
+///
+/// The gate is carried because it is the only place it exists: the code is
+/// in `x.rs`, which has no way to know. See
+/// [`crate::indexer::languages::LanguageIndexer::test_only_child_modules`].
+pub(crate) struct ChildModule {
+    pub name: String,
+    pub test_only: bool,
+}
+
+fn walk_for_child_modules(node: Node, source: &[u8], in_test: bool, out: &mut Vec<ChildModule>) {
     if node.kind() == "mod_item" && node.child_by_field_name("body").is_none() {
         if let Some(name) = get_node_text(node.child_by_field_name("name"), source) {
-            out.push(name);
+            out.push(ChildModule {
+                name,
+                // `in_test` as well as the declaration's own attribute: a
+                // bodiless `mod` nested inside a `#[cfg(test)] mod tests {}`
+                // is just as test-only, and only the outer gate says so.
+                test_only: in_test || is_test_module(&node, source),
+            });
         }
         return;
     }
+    let nested = in_test || (node.kind() == "mod_item" && is_test_module(&node, source));
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk_for_child_modules(child, source, out);
+        walk_for_child_modules(child, source, nested, out);
     }
 }
 

@@ -359,6 +359,19 @@ pub struct FileNode {
     #[serde(default, rename = "dispatchBindings", skip_serializing_if = "Vec::is_empty")]
     pub dispatch_bindings: Vec<DispatchBinding>,
 
+    /// Child modules this file declares as test-only, whose code lives in
+    /// another file — Rust's `#[cfg(test)] mod chat_eval;`.
+    ///
+    /// File-level for the same reason as `dispatch_bindings`: the gate and
+    /// the code it gates are in different files, so resolving it needs
+    /// every file at once. Spent by
+    /// [`crate::indexer::mark_test_only_modules`], which sets the named
+    /// file's `classification` to `Test` — after which the ordinary
+    /// `is_test` path, which already prefers the classifier over a
+    /// filename guess, does the rest.
+    #[serde(default, rename = "testOnlyModules", skip_serializing_if = "Vec::is_empty")]
+    pub test_only_modules: Vec<String>,
+
     /// Calls and references written at module scope, outside any symbol.
     ///
     /// File-level because that is whose code it is. A browser bundle does

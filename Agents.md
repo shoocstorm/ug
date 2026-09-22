@@ -2343,6 +2343,84 @@ a denominator built from its own predicate reports `has_doc 100%` whatever the
 graph holds. A type restriction is the only part of a filter that answers "do
 the things this query is about carry the property".
 
+### 11n. Headless Chrome verifies a browser feature — but not with virtual time
+
+`demos/wllama-chat` is the wllama (llama.cpp-in-WASM) spike. Two things cost
+time there, and both will cost it again next time a browser-side runtime is
+evaluated.
+
+**`--virtual-time-budget` hangs, and a hung headless Chrome pins a core until
+it is killed.** `--headless=new --dump-dom` on its own returns as soon as the
+page load event fires, which is after module scripts have run — enough to prove
+the app booted (cards rendered, caps detected, no throw). Anything that has to
+wait for real async work (a download, a generation) must report back instead:
+the page POSTs its result to a `/__result` route on the same server that serves
+it, the runner races that against a timeout, then `SIGKILL`s the browser and
+removes the temp profile. `scripts/smoke.mjs` is that shape, and it is the only
+way the 639 MB Qwen3 run was verified end to end. Always kill the browser yourself;
+never trust the page to exit.
+
+**A WASM runtime in a worker needs absolute asset paths and COOP/COEP.** wllama
+creates its worker from a `blob:` URL, where a relative `./…/wllama.wasm` has no
+useful base — resolve against `import.meta.url` before handing a path to a
+worker. And multi-thread needs `SharedArrayBuffer`, which needs
+`Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy:
+require-corp` on the page. Without them nothing errors: it silently runs
+single-threaded, which is a 9x slower measurement that looks like a real one.
+
+### 11o. A fact about a file that is written in a different file
+
+`native/src/lib.rs` says `#[cfg(test)] mod chat_eval;`. That makes every line
+of `chat_eval.rs` test code, and **nothing the per-file indexer reads while
+parsing `chat_eval.rs` can tell** — the helpers carry no `#[test]`, the path
+matches no test marker, and the classifier sees one file at a time. So
+`is_test` was 0 for all of it and `orphan_files` listed a test module as
+unreachable *production* code, under a description promising to exclude tests.
+
+The earlier fix for the same class of miss widened the filename markers
+(§9o). That could never have caught this one: the file is not named for
+tests, and the fact about it is not in it.
+
+**When a language lets one file make a claim about another, the per-file
+indexer is structurally unable to see it, and no amount of looking harder at
+that file will help.** Record the half you can see and spend it once every
+file is in hand — `dispatch_bindings` already does exactly this for route
+tables whose handler lives elsewhere, and `FileNode::test_only_modules` now
+does it for `#[cfg(test)] mod`. Other members of the family worth
+remembering: `pub use` re-exports, `#[path = "…"]`, a barrel `index.ts`, a
+build script that generates a module.
+
+Write the conclusion to the signal that already propagates. Setting
+`classification = Test` is one assignment, and `graph::build` stamps a file's
+classification onto every symbol while `is_test_node` prefers the classifier
+over the filename guess — so `ug context`, the analyze presets and the stored
+fact all agree without three separate fixes.
+
+### 11p. `GRAPH_SCHEMA_VERSION` does not make a fix take effect
+
+The first check of the fix above showed **no change at all**, and the fix was
+correct. `ug gen` is incremental: `lib.rs` had not changed, so its `FileNode`
+came from `indexed-tree.json`, written before the new field existed and
+deserialized empty. The gate was never read.
+
+`INDEXER_VERSION` is what drops that cache. It had not been bumped — and
+neither had it been bumped for the Python docstring fix one commit earlier,
+where `GRAPH_SCHEMA_VERSION` was raised instead. That would have shipped a fix
+which, on any existing install, repaired only the files someone happened to
+edit afterwards.
+
+**The two versions answer different questions.** `GRAPH_SCHEMA_VERSION` tells
+a *reader* which facts an already-written graph is entitled to be trusted on.
+`INDEXER_VERSION` invalidates the per-file cache, and is the only one that
+makes a newly-populated field reach files nobody touched. The trigger is wider
+than it looks: **bump it whenever a field on `FileNode` or `Symbol` starts
+being populated, not only when its shape changes** — a field that has existed
+for years but was always `None` for one language is exactly this case.
+
+How to catch it: **verify an indexer change against an index that already
+exists, not a fresh one.** A first-run `ug gen` re-parses everything and hides
+this completely.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
