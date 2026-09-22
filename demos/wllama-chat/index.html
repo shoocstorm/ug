@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wllama · in-browser LLM demo</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "@wllama/wllama": "./node_modules/@wllama/wllama/esm/index.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="dot"></span>
+        <h1>wllama</h1>
+        <span class="tag">llama.cpp in the browser · no server, no API key</span>
+      </div>
+      <div class="caps" id="caps"></div>
+    </header>
+
+    <main class="layout">
+      <!-- ── left: model picker ───────────────────────────────── -->
+      <section class="panel models">
+        <h2>1 · Pick a model</h2>
+        <ul class="model-list" id="modelList"></ul>
+
+        <div class="load-box">
+          <button class="primary" id="loadBtn">Download &amp; load</button>
+          <button class="ghost" id="unloadBtn" hidden>Unload</button>
+          <button class="ghost danger" id="evictBtn" hidden>Delete from cache</button>
+        </div>
+
+        <div class="progress" id="progressWrap" hidden>
+          <div class="bar"><div class="fill" id="progressFill"></div></div>
+          <div class="progress-meta">
+            <span id="progressLabel">Starting…</span>
+            <span id="progressPct">0%</span>
+          </div>
+        </div>
+
+        <dl class="info" id="modelInfo" hidden></dl>
+      </section>
+
+      <!-- ── right: chat ──────────────────────────────────────── -->
+      <section class="panel chat">
+        <h2>2 · Talk to it</h2>
+
+        <div class="thread" id="thread">
+          <div class="empty" id="emptyState">
+            <p>Load a model to start chatting.</p>
+            <p class="hint">
+              Everything runs locally — the GGUF is downloaded once into OPFS and
+              inference happens in a Web Worker on this machine.
+            </p>
+          </div>
+        </div>
+
+        <div class="composer">
+          <div class="composer-row">
+            <textarea
+              id="input"
+              rows="2"
+              placeholder="Load a model first…"
+              disabled
+            ></textarea>
+            <div class="composer-actions">
+              <button class="primary" id="sendBtn" disabled>Send</button>
+              <button class="ghost" id="stopBtn" hidden>Stop</button>
+            </div>
+          </div>
+          <div class="composer-meta">
+            <label class="toggle" id="thinkToggleWrap" hidden>
+              <input type="checkbox" id="thinkToggle" />
+              <span>thinking mode</span>
+            </label>
+            <label class="slider">
+              temp
+              <input type="range" id="temp" min="0" max="1.5" step="0.05" value="0.7" />
+              <output id="tempOut">0.70</output>
+            </label>
+            <label class="slider">
+              max tokens
+              <input type="range" id="maxTokens" min="64" max="2048" step="64" value="512" />
+              <output id="maxTokensOut">512</output>
+            </label>
+            <span class="spacer"></span>
+            <span class="stats" id="stats"></span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="statusbar"><span id="status">Ready.</span></footer>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

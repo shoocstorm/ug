@@ -1,0 +1,14 @@
+{
+  "name": "wllama-chat-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Proof that wllama (llama.cpp compiled to WASM) can download and host a GGUF model entirely in the browser.",
+  "scripts": {
+    "start": "node server.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@wllama/wllama": "^3.6.1"
+  }
+}
