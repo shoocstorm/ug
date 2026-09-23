@@ -61,7 +61,7 @@ A four-phase pipeline ([interactive view](https://ultra-graph.web.app/architectu
 | **Languages** | TypeScript, JavaScript, Python, Java, Rust, Markdown, PDF |
 | **Graph** | Functions, Classes, Interfaces, Imports, Calls — with cross-file call resolution |
 | **Search** | Semantic + keyword + graph expansion (GraphRAG) |
-| **Chat** | RAG-grounded chat against any OpenAI-compatible LLM |
+| **Chat** | RAG-grounded chat against any OpenAI-compatible LLM — or against a model running in your browser tab, downloaded from the UI, no key and no server |
 | **Changes** | `ug walk` — narrated walkthrough of a git diff in call-graph order |
 | **Interfaces** | Web UI, desktop app (Tauri), MCP server, CLI |
 
@@ -83,6 +83,11 @@ A four-phase pipeline ([interactive view](https://ultra-graph.web.app/architectu
 Run `ug -h` for the full list, or `ug <command> -h` for flags.
 
 ## Configuration
+
+No LLM to point it at? Open the web UI, click the chip icon in the sidebar
+header, and pick a small model: it downloads once into the browser, runs
+there (llama.cpp compiled to WebAssembly) and becomes this server's chat
+endpoint for answers, tours and walks. See [docs/CHAT.md](docs/CHAT.md).
 
 ```bash
 ug config set chat.model gpt-4o-mini

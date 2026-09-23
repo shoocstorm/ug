@@ -120,6 +120,38 @@ short window rather than assuming the cap protects you.
 Run `ug chat -h` for the complete flag reference (temperature, max-tokens,
 system prompt override, snippet/repo-root resolution, etc).
 
+## No endpoint at all: run the model in the browser
+
+Everything above assumes you have an OpenAI-compatible endpoint. If you do
+not, `ug serve` can borrow one from the browser: open the UI, click the chip
+icon in the sidebar header (or **Run one in this browser** on the banner that
+says answers need a model), and pick a model. It downloads once into the
+browser's own storage, runs there with llama.cpp compiled to WebAssembly, and
+registers itself as this server's chat endpoint.
+
+From then on `/api/chat`, `/api/tour` and `/api/walk` — and `ug chat` in a
+terminal, as long as the tab stays open — are answered on your machine, with
+the same prompts, tools and citations. Nothing is sent anywhere.
+
+What to expect: SmolLM2 135M (138 MB) is there to prove the plumbing — it
+downloads in seconds, answers instantly and talks nonsense; Qwen3 0.6B
+answers at tens of tokens a second and narrates tours well but is weak at
+multi-step tool use; Qwen3 1.7B is the usable middle. A model that cannot use the graph
+toolbox — no tool-calling template, or simply too small to call one properly —
+is never handed it: the turn falls back to seeded retrieval, which is the
+`--no-tools` path and answers most questions better anyway at these sizes.
+
+The window you pick decides the rest. ug's toolbox is ~9 900 tokens of JSON
+schema on its own, so below 8192 tokens there is no room for it at all; the
+panel labels each window with what it buys and caps the retrieval controls
+(`k`, hops, results, tour stops) to what will actually fit. Retrieval budgets are clamped automatically to whatever context
+window the model was loaded with, so a local model gets a smaller, tighter
+context pack than a hosted one — see "Phase 5" in `docs/WEB-SERVE.md` for the
+mechanics.
+
+Closing the tab stops the model and hands chat back to whatever endpoint was
+configured before.
+
 ## Chat over HTTP (`POST /api/chat`)
 
 `ug serve` exposes the same pipeline at `POST /api/chat`. Start the server with

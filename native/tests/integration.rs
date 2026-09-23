@@ -95,6 +95,7 @@ mod storage_bench;
 mod storage_test;
 mod traversal_test;
 mod vis_ask_dispatch_test;
+mod vis_boundary_rings_test;
 mod vis_changes_panel_test;
 mod vis_chat_markdown_test;
 mod vis_assembly_test;

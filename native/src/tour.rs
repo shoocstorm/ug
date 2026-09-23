@@ -344,6 +344,16 @@ pub struct TourOptions<'a> {
     pub edge_types: Option<&'a [String]>,
     pub include_snippets: bool,
     pub max_context_chars: usize,
+    /// Absolute ceiling on the planning prompt, whatever the auto-scaling
+    /// below would otherwise choose.
+    ///
+    /// `max_context_chars` alone cannot express this: a value at or under
+    /// `DEFAULT_CONTEXT_CHARS` is read as "caller didn't set one" and is
+    /// replaced by [`plan_context_chars`], so asking for *less* than the
+    /// default silently gets more. That is fine when the ceiling is a
+    /// preference and fatal when it is a model's context window — see
+    /// `serve/local_llm.rs`.
+    pub context_hard_cap: Option<usize>,
     pub where_clause: Option<&'a str>,
     /// Cap on candidates drawn from any single file (0 = no cap).
     pub max_per_file: usize,
@@ -375,6 +385,7 @@ impl<'a> TourOptions<'a> {
             edge_types: None,
             include_snippets: true,
             max_context_chars: DEFAULT_CONTEXT_CHARS,
+            context_hard_cap: None,
             where_clause: None,
             max_per_file: DEFAULT_MAX_PER_FILE,
             include_debug: true,
@@ -1650,6 +1661,9 @@ pub(crate) async fn plan_from_candidates(
     } else {
         opts.max_context_chars
     };
+    // A hard cap outranks the auto-scaling: the scaling exists to grow the
+    // menu for a long itinerary, not to overflow a 4k-token window.
+    let ctx_chars = opts.context_hard_cap.map_or(ctx_chars, |cap| ctx_chars.min(cap));
 
     let (messages, shown) =
         build_plan_messages(query, &items, &edges, ctx_chars, opts.max_stops, brief);

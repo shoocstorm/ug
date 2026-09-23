@@ -33,6 +33,51 @@
         // circle seeding in transformData lands well inside it.
         const COSMOS_SPACE = 4096;
 
+        // ── Zoom stops ─────────────────────────────────────────
+        //
+        // `k` here is screen pixels per space unit — `rescalePositions` is
+        // off, so the simulation's own coordinates *are* the space, and the
+        // whole of it is COSMOS_SPACE units across.
+        //
+        // cosmos.gl hands d3-zoom a scale extent of [0.001, ∞], which is no
+        // limit at all in either direction: the wheel takes the graph down to
+        // a four-pixel smudge, or past the point where zooming in stops
+        // looking closer (`convertSpaceToScreenRadius` caps a point's screen
+        // size at `maxPointSize`, so beyond ~12 the nodes stop growing and the
+        // view merely spreads).
+        //
+        // The extent is also the one lever that bounds every *programmatic*
+        // fit: `Zoom.getTransform` clamps the scale it computes to it. That is
+        // what stops `fitViewByPointIndices` slamming the camera into a
+        // two-node set — cosmos.gl widens a degenerate extent by half a unit
+        // and fits that, which without a ceiling is a zoom of several hundred.
+        //
+        // Out: the whole space may not shrink below 180 px on screen. A graph
+        // that fills the space fits whole at `0.7 × shortSide / 4096`
+        // (fitView's padding is 0.15 a side), which stays above this floor for
+        // any canvas taller than ~257 px — so the stop can never prevent the
+        // graph being framed whole.
+        const COSMOS_MIN_ZOOM = 180 / COSMOS_SPACE;
+        // In: a default point is 6 units and draws at `2 × size × k` px, so 12
+        // is a ~144 px disc — about where `maxPointSize` takes over anyway.
+        const COSMOS_MAX_ZOOM = 12;
+        // Where a focus flight settles. It was 4, which puts ~200 space units
+        // across an 800 px canvas: the node, its immediate neighbours, and
+        // nothing that says where in the graph any of it is. The layout's link
+        // distance is a constant 50 whatever the repo's size, so a fixed
+        // pixels-per-unit zoom frames a constant number of *hops* — 1.6 is
+        // about fourteen of them.
+        const COSMOS_FOCUS_ZOOM = 1.6;
+
+        // Guarded, because `zoomInstance` is cosmos.gl's own field name and
+        // nothing declares it: a re-vendor that renames it degrades to the
+        // library's unbounded default rather than throwing on page load.
+        function cosmosClampZoom() {
+            const behavior = cosmos && cosmos.zoomInstance && cosmos.zoomInstance.behavior;
+            if (!behavior || typeof behavior.scaleExtent !== 'function') return;
+            behavior.scaleExtent([COSMOS_MIN_ZOOM, COSMOS_MAX_ZOOM]);
+        }
+
         // Additive blending for links — richer where strands overlap, and at
         // high resolution the single biggest cost in every frame.
         //
@@ -170,14 +215,22 @@
 
         // Build one image per (type × boundary direction) actually present in
         // the view. Types the graph doesn't contain cost nothing.
+        //
+        // A boundary node's *ringless* variant is carried too, even when no
+        // plain node of that type is in the view: it is what the node wears
+        // while it is dimmed (see `cosmosGlyphIndexFor`), and a type whose only
+        // members are boundaries would otherwise have nothing to fall back to.
         function cosmosBuildAtlas(nodes) {
             const keys = [];
             cosmosImageIndex = new Map();
-            for (const n of nodes) {
-                const k = cosmosImageKey(n);
-                if (cosmosImageIndex.has(k)) continue;
+            const add = (k) => {
+                if (cosmosImageIndex.has(k)) return;
                 cosmosImageIndex.set(k, keys.length);
                 keys.push(k);
+            };
+            for (const n of nodes) {
+                add(cosmosImageKey(n));
+                if (n.isBoundary) add(n.group);
             }
             cosmos.setImageData(keys.map(cosmosGlyphImage));
         }
@@ -283,7 +336,7 @@
                 positions[i * 2] = +node.x || 0;
                 positions[i * 2 + 1] = +node.y || 0;
                 shapes[i] = cosmosShapeFor(node.group);
-                imageIdx[i] = cosmosImageIndex.get(cosmosImageKey(node)) ?? -1;
+                imageIdx[i] = cosmosGlyphIndexFor(node);
                 sizes[i] = nodeRadiusFor(node);
                 imageSizes[i] = sizes[i] * cosmosGlyphFit(node.group);
             }
@@ -299,9 +352,11 @@
             cosmos.setLinkColors(cosmosBuf.linkColors);
             cosmos.setLinkWidths(cosmosBuf.linkWidths);
             cosmosHitInvalidate();
-            // A new point set: whatever was pushed described the old one.
+            // A new point set: whatever was pushed described the old one, and
+            // the boundary indices described its ordering.
             _hlFocus = -2;
             _hlOutlined = undefined;
+            _hlBoundary = null;
         }
 
         // Refresh the colour/width buffers from the shared style rules. Alpha
@@ -1128,15 +1183,99 @@
         // where the point set itself changes underneath both.
         let _hlFocus = -2;          // -2 is "nothing pushed yet"; undefined is a real value
         let _hlOutlined;
+        // Which points are boundary nodes. A property of the graph, not of what
+        // is on screen, so it is scanned once per build rather than on every
+        // restyle — which meant walking all 485,175 points on every hover to
+        // rebuild a list that cannot have changed.
+        let _hlBoundary = null;
+
+        function cosmosBoundaryIndices() {
+            if (_hlBoundary) return _hlBoundary;
+            _hlBoundary = [];
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                if (cosmosNodes[i].isBoundary) _hlBoundary.push(i);
+            }
+            return _hlBoundary;
+        }
+
+        // The boundary nodes that still carry their ring: dimmed ones lose it,
+        // the same way the 3D renderer fades `__boundaryRing` to zero.
+        //
+        // cosmos.gl draws the outline from a *uniform* colour whose alpha is
+        // fixed, and `ringAlpha` in the point shader is purely geometric — the
+        // point's own alpha, which is where all of this page's dimming lives,
+        // never reaches it. (The shader *does* fade a ring, but only for
+        // points greyed out through cosmos.gl's own greyout path, which we do
+        // not use: see `pointOcclusionCulling` in the mount config for why the
+        // dimming is carried in the colour alpha instead.) So a focus, a tour,
+        // a walk or a context pack dimmed the whole graph and left every
+        // boundary node ringed at full strength — reading as "these are the
+        // relevant ones", which is the opposite of what the dimming says.
+        //
+        // Membership is the only lever there is, so it is the one used.
+        // `nodeLightingFor` is evaluated over the boundary nodes alone rather
+        // than the graph, so this stays bounded by how many there are.
+        function cosmosOutlinedIndices() {
+            const out = [];
+            for (const i of cosmosBoundaryIndices()) {
+                if (!nodeLightingFor(cosmosNodes[i]).dim) out.push(i);
+            }
+            return out;
+        }
+
+        // Which atlas image a node wears. The dashed boundary rim is *baked
+        // into the glyph image* (`cosmosGlyphImage`) because a point image
+        // cannot exceed its own quad the way the 3D ring sprite can — and an
+        // image is the one thing on a point that this page's dimming cannot
+        // reach.
+        //
+        // cosmos.gl's point shader does
+        //
+        //     finalPointAlpha = max(finalShapeColor.a, finalImageColor.a);
+        //     fragColor = vec4(mix(shape.rgb, image.rgb, image.a), finalPointAlpha);
+        //
+        // and `finalImageColor` is the atlas sample, untouched by the point's
+        // own colour. So on a dimmed node the *disc* faded to alpha 0.06 and
+        // the rim stayed at the 1.0 it was drawn with, in full amber or
+        // violet: focus a node and every boundary node in the graph still
+        // announced itself. (The dark glyph rides the same path and is
+        // likewise undimmed, but it is drawn near the background tone, which
+        // is why only the rim was ever visible.)
+        //
+        // The image cannot be faded, so the ringed variant is simply not worn
+        // while the node is dim — the same lever, and the same reasoning, as
+        // `cosmosOutlinedIndices` above.
+        function cosmosGlyphIndexFor(n) {
+            const key = nodeLightingFor(n).dim ? n.group : cosmosImageKey(n);
+            return cosmosImageIndex.get(key) ?? cosmosImageIndex.get(n.group) ?? -1;
+        }
+
+        // Re-read the boundary nodes' glyphs. Returns true when one moved, so
+        // the caller knows the image-index buffer has to reach the GPU — a
+        // `setPointImageIndices` only raises a flag, and the upload behind it
+        // lives in `create()`, which only `render()` gets to (§9f).
+        //
+        // Only boundary nodes can move: every other node wears its type's
+        // glyph in every state. Bounded by how many there are, not by the
+        // graph, so this is affordable on the hover path it shares.
+        function cosmosPaintGlyphs() {
+            if (!cosmosBuf) return false;
+            const { imageIdx } = cosmosBuf;
+            let moved = false;
+            for (const i of cosmosBoundaryIndices()) {
+                const want = cosmosGlyphIndexFor(cosmosNodes[i]);
+                if (imageIdx[i] === want) continue;
+                imageIdx[i] = want;
+                moved = true;
+            }
+            return moved;
+        }
 
         function cosmosApplyHighlight() {
             const focusIdx = state.selectedNode
                 ? cosmosIndexOf.get(state.selectedNode.id)
                 : undefined;
-            const outlined = [];
-            for (let i = 0; i < cosmosNodes.length; i++) {
-                if (cosmosNodes[i].isBoundary) outlined.push(i);
-            }
+            const outlined = cosmosOutlinedIndices();
             const outlinedArg = outlined.length ? outlined : undefined;
 
             // Only when it actually changed.
@@ -1151,8 +1290,16 @@
             // hover, where neither value can have changed.
             //
             // Compared by content, because the array is rebuilt each call and
-            // identity would always differ. It is boundary nodes, so it moves
-            // when a filter or a walk moves it, and not otherwise.
+            // identity would always differ.
+            //
+            // The set moves when the *dimming* moves — entering or leaving
+            // focus, a tour stop, a walk hop, a context pack — and not
+            // otherwise, so a hover, a pan and a plain recolour all still
+            // compare equal and push nothing. That is the price of the ring
+            // following the dimming above: one point-status rewrite per change
+            // of mode, on a path that already repaints the whole canvas. It is
+            // *not* per frame and not per hover; if a walk ever stutters on a
+            // graph with many boundary nodes, this is the line to suspect.
             const sameOutlined = _hlOutlined === undefined
                 ? outlinedArg === undefined
                 : (outlinedArg !== undefined
@@ -1789,6 +1936,7 @@
                 });
 
                 await cosmos.ready;
+                cosmosClampZoom();
                 cosmosInstallCpuPicking();
                 cosmosBuild(view);
                 // Snap the first upload into place. The default 800 ms
@@ -1862,6 +2010,17 @@
                     return;
                 }
                 const scoped = scope && !state.walkActive;
+                // A boundary node's glyph carries its rim, and the rim has to
+                // come and go with the dimming. Both fast paths below write
+                // colour bytes straight into a GPU buffer and never reach
+                // `render()`, which is the only thing that uploads an image
+                // index — so a glyph that moved disqualifies them, exactly as
+                // a too-scattered colour set does.
+                //
+                // In practice it never costs a hover one: dimming is a
+                // function of focus, tour, walk and pack state, none of which
+                // a pointer move touches.
+                const glyphsMoved = cosmosPaintGlyphs();
                 if (scoped) {
                     // The fast path: repaint the scope, push only those slots
                     // to the GPU, and let the frame we are already inside draw
@@ -1869,7 +2028,7 @@
                     // of `update()` → `create()` → `updateColor()` → `ga()`.
                     const touched = cosmosPaintScoped(scope);
                     const pts = cosmos.points, lns = cosmos.lines;
-                    if (pts && lns
+                    if (!glyphsMoved && pts && lns
                         && cosmosWriteColors(pts.targetColorBuffer, cosmosBuf.colors, touched.nodes)
                         && cosmosWriteColors(lns.targetColorBuffer, cosmosBuf.linkColors, touched.links)) {
                         cosmosApplyHighlight();
@@ -1901,7 +2060,7 @@
                 if (!scoped) {
                     visChanged = cosmosApplyVisibility();
                     const pts = cosmos.points, lns = cosmos.lines;
-                    if (!_paintOver && !_paintWidths && !visChanged && pts && lns
+                    if (!glyphsMoved && !_paintOver && !_paintWidths && !visChanged && pts && lns
                         && cosmosWriteColors(pts.targetColorBuffer, cosmosBuf.colors, _paintNodes)
                         && cosmosWriteColors(lns.targetColorBuffer, cosmosBuf.linkColors, _paintLinks)) {
                         cosmosApplyHighlight();
@@ -1932,6 +2091,7 @@
                     cosmos.setLinkColors(cosmosBuf.linkColors);
                 }
                 if (!scoped && _paintWidths) cosmos.setLinkWidths(cosmosBuf.linkWidths);
+                if (glyphsMoved) cosmos.setPointImageIndices(cosmosBuf.imageIdx);
                 cosmosApplyHighlight();
                 // Snap rather than animate: a restyle is a response to a hover
                 // or a filter, and an 800 ms colour tween reads as lag.
@@ -1982,7 +2142,12 @@
                 const idx = cosmosIndicesFor(ids);
                 if (!idx.length) return;
                 cosmosMotion(ms);
-                cosmos.fitViewByPointIndices(idx, ms, 0.2);
+                // A generous margin: this frames a *set the page has just lit
+                // up*, and a fit that ends at the rim of it reads as the graph
+                // having been cropped rather than as the set having been
+                // found. The zoom ceiling above keeps a two-node set from
+                // filling the canvas.
+                cosmos.fitViewByPointIndices(idx, ms, 0.3);
             },
 
             setNodePositions(pos, ms) { cosmosSetNodePositions(pos, ms); },
@@ -2001,7 +2166,7 @@
                 // their layout before the view moves.
                 requestAnimationFrame(() => {
                     cosmosMotion(800);
-                    cosmos.zoomToPointByIndex(i, 800, 4);
+                    cosmos.zoomToPointByIndex(i, 800, COSMOS_FOCUS_ZOOM);
                 });
             },
 
@@ -2084,6 +2249,7 @@
                 _motionHiding = false;
                 _hlFocus = -2;
                 _hlOutlined = undefined;
+                _hlBoundary = null;
                 hitStart = null;
                 hitItems = null;
                 hitCellOf = null;

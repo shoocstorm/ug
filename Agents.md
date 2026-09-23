@@ -1212,6 +1212,108 @@ simply blind to that entire node type forever.
   were real reads that a different gap was hiding; the twelfth was genuinely
   dead code that had been invisible since the constant was written.
 
+### 9x. A camera constant that is absolute in a world whose size varies
+
+Three framing decisions in the vis layer were fixed numbers, and each one
+meant a different amount of context depending on how big the repo was.
+
+`focusNode` flew the 2D camera to zoom level **4** — pixels per space unit,
+so ~200 space units across an 800 px canvas. On a small graph that is the
+node and a comfortable ring around it; on `~/.ug/neo4j` it is a 30× jump from
+the overview into four link lengths of a 161,725-node cloud, with nothing on
+screen that says where you landed. The 3D side had the same shape: a flat
+480-unit orbit radius, and a `min(1500, …)` ceiling on the multi-node fit
+that put the camera *inside* a set it had been asked to frame.
+
+The fog in the same file carries a comment about exactly this bug ("a fixed
+exponential density tuned for a small graph, which blacked out everything on
+a large one"), which is the point: the fix went in one constant and the
+neighbours were left absolute.
+
+- **A framing number is a statement about how much of the graph you want to
+  see, so express it as a share of the graph** — `state._graphRadius` in 3D,
+  a multiple of the fit zoom or of the layout's link distance in 2D — and
+  clamp the share rather than fixing the value.
+- **Nothing in this layer has a limit unless you set one.** OrbitControls
+  starts at `[0, ∞]` and cosmos.gl hands d3-zoom `[0.001, ∞]`, so the wheel
+  runs the camera through the node it is orbiting and out until the graph is
+  a speck. Neither is visible in review; you have to drive one to the end.
+- **The zoom extent also bounds every *programmatic* fit**, because
+  `Zoom.getTransform` clamps to it. That is the only thing standing between a
+  one-node `fitViewByPointIndices` and a zoom of several hundred — cosmos.gl
+  widens a degenerate extent by half a unit and fits *that*. When a library
+  offers one limit for the gesture and the API both, set it there rather than
+  guarding each call site.
+
+And the adjacent one, found in the same pass: **"light up these N nodes"
+framed the first of them.** `lightUpNodes` set the whole highlight and then
+called `focusNode(capped[0])`, so the rest of the answer sat outside the
+canvas with nothing saying the highlight continued past the edge. Whenever an
+action acts on a set, check that what it *shows* is the set and not its first
+element.
+
+
+### 9y. A mark the *library* draws does not obey your dimming
+
+Every mode that dims this page — focus, a tour, a walk, a context pack — does
+it by writing a smaller alpha into the node's colour, because cosmos.gl has no
+per-node material to fade. A boundary node is marked twice, and **neither mark
+is reachable from that alpha**:
+
+1. cosmos.gl's outline ring comes from a *uniform*, `outlinedPointRingColor`,
+   and the shader's `ringAlpha` is purely geometric.
+2. The dashed rim is also **baked into the node's glyph image** (a point image
+   cannot exceed its own quad the way the 3D ring sprite can), and the point
+   shader composites the image as
+
+   ```glsl
+   finalPointAlpha = max(finalShapeColor.a, finalImageColor.a);
+   fragColor = vec4(mix(shape.rgb, image.rgb, image.a), finalPointAlpha);
+   ```
+
+   so an opaque image pixel wins outright. The disc faded to alpha 0.06; the
+   rim stayed at the 1.0 it was drawn with, in full amber.
+
+The fix is the same lever in both places — a dimmed node does not join the
+outlined set, and wears the ringless variant of its type's glyph — but it had
+to be applied **twice**, and was not. Fixing (1) alone changed nothing anyone
+could see, because (2) draws at nearly the same radius and was still there.
+That is the shape to watch for: *one mechanism fixed, the symptom unchanged,
+and the obvious conclusion is that the diagnosis was wrong.* It was not. It was
+incomplete.
+
+- **Count the marks before fixing one.** "Why is this still bright" has as many
+  answers as there are layers drawing it: your own sprites, a set you hand the
+  library, and anything you baked into a texture. Grep for every place the
+  feature's colour constant is read — `BOUNDARY_IN_COLOR` appeared in the mount
+  config *and* in the atlas builder, two screens apart.
+- **A texture is a decision frozen at build time.** Anything painted into an
+  atlas image cannot respond to state. Either the state has to pick a different
+  image (what `cosmosGlyphIndexFor` does) or it does not respond at all.
+- **When the library gives you no alpha, membership is the lever**, and it
+  should read the same predicate the rest of the page dims on
+  (`nodeLightingFor(n).dim`) so a mode nobody thought about — the context pack,
+  here — is covered by construction.
+- **Evaluate that predicate over the marked nodes, not the graph.** The
+  boundary list is a property of the graph, so it is scanned once per build;
+  only which of those few are dim changes per restyle. The scan it replaced
+  walked all 485,175 points on every hover to rebuild a list that could not
+  have changed.
+- **An image index reaches the GPU only through `render()`.** `setPointImageIndices`
+  raises a flag; the upload lives in `create()` — the same trap as
+  [§9f](#9f-a-buffer-that-never-leaves-the-cpu). So a moved glyph disqualifies
+  both of `restyle`'s partial-upload fast paths, which write colour bytes
+  straight into a GPU buffer and never call `render()`.
+- **Fix both renderers, and check the one you are not in.** Same instinct as
+  §9v's "check all four indexers". The 3D ring is our own sprite and
+  `threeRestyle` already faded it, with a comment saying why — so anyone
+  checking the behaviour in the code found the correct implementation and
+  stopped. A feature with two backends has two of everything, and the one that
+  is right is what hides the one that is not.
+
+`tests/js/boundary_rings.mjs` pins both marks, per mode, without a browser
+(§10r).
+
 ## 10. Measuring performance without fooling yourself
 
 **Every number in `docs/dev/PERF-TUNING-JOURNEY.md` was produced this way, and
@@ -2321,6 +2423,17 @@ file whose consumers arrive by the missing edge type. When a change looks like
 it does nothing, check whether the cases you sampled can express it — see
 §11i.
 
+**A duplicate whose only caller is its own test reads as alive and is not.**
+`Attached::context_chars` and `LocalLlm::plan_prompt` both derived "how many
+characters of retrieval fit this model's window" from `n_ctx`, and had already
+drifted: the first never subtracted the system prompt, so it advertised a
+window larger than any turn actually gets. Production used the second.
+`dead_code` was the only thing that noticed — two tests were asserting the
+invariant of a number nothing was sized by, which is worse than not asserting
+it, because it reads as coverage. **When the compiler calls something dead,
+check whether it is a second implementation of something live before deleting
+it, and move its tests onto the survivor rather than dropping them.**
+
 ### 11m. A denominator that is not about what you asked
 
 `analyze`'s coverage line probes `MATCH (n) RETURN count(*), count(n.prop)` —
@@ -2420,6 +2533,79 @@ for years but was always `None` for one language is exactly this case.
 How to catch it: **verify an indexer change against an index that already
 exists, not a fresh one.** A first-run `ug gen` re-parses everything and hides
 this completely.
+
+### 11q. A ceiling that a later auto-scale can lift is not a ceiling
+
+Found while making the browser-hosted model (`serve/local_llm.rs`) work for
+tours. Three traps, in the order they bit.
+
+**`if (value <= DEFAULT) { auto_scale() }` cannot tell "unset" from "less".**
+`plan_tour` grows its planning prompt when `max_context_chars` is at or below
+`DEFAULT_CONTEXT_CHARS`, on the reading that anything there is the default and
+a long itinerary deserves a longer menu. Clamping that field to a 4k-token
+model's window therefore *raised* the prompt to 48 kB and every tour died on
+`kv_cache_full`. A preference and a hard limit cannot share one field:
+`TourOptions::context_hard_cap` is now separate, and the auto-scaling min()s
+against it. Look for this shape anywhere a default doubles as a signal — the
+sentinel is invisible at the call site and the failure is silent.
+
+**The context pack is not the prompt.** The first clamp sized the *retrieved
+context* to the model's window and shipped — and every question still failed
+with `request (10183 tokens) exceeds the available context size (4096)`,
+because the toolbox is twelve JSON Schemas, ~9 900 tokens, and it is sent
+before anything is retrieved. A window has to hold the system prompt, the
+schemas, the question, everything the tools return *and* the answer. Budget
+all five or the one you measured is the one that was never the problem; and
+when the sum does not fit, cut the part that is big rather than the part that
+is yours to cut — `max_result_chars` defaulting to 60 kB is 20 000 tokens,
+five times some of these windows, and every round's result stays resident
+until the turn ends.
+
+**A provider that lives in a browser tab needs its disconnect wired to
+teardown.** Nothing else can tell you the tab is gone: the attachment, the
+queued jobs and the server's `chat_default` all keep pointing at it, and each
+caller discovers the truth by waiting out its own 15-minute timeout. The SSE
+stream's `Drop` is the signal, and every in-flight job is failed from there
+with a message that names the cause. The mirror-image trap is on the client:
+an `EventSource` reconnect is a *new* stream, which the server already read as
+a disconnect, so the page must re-attach on every `open` or chat quietly stays
+broken after a blip.
+
+**Default middleware meets an 8 MB asset.** `CompressionLayer` would
+brotli-compress `wllama.wasm` on every request — seconds of CPU each time, for
+a transfer that is almost always loopback and that the browser caches for a
+year anyway. It is excluded by content type, and the asset is served
+`immutable` under a version-bearing path. Check what a new static route costs
+before adding it to a router that compresses everything.
+
+And two that cost time only in the harness: Chrome's CDP target exists before
+the document is parsed, so an `evaluate` right after attaching runs in the
+initial empty document where `crossOriginIsolated` is false and every id is
+null — wait for `readyState === 'complete'`. And in Node, `String(chunk)` on a
+`fetch` body's `Uint8Array` yields `"100,97,116,97"`, not text, which reads
+exactly like a streaming endpoint sending nothing. Use a `TextDecoder`.
+
+### 11r. Two ways the vis page hides a thing that is still on screen
+
+Both cost a round of "the code is right, look at the screenshot" while adding
+the in-browser model panel, and both are properties of this page rather than
+of that feature.
+
+**`hidden` is only a user-agent `display: none`.** Any rule that sets
+`display` on the same element outranks it, so `el.hidden = true` leaves a
+`display: flex` block exactly where it was. It bit three elements in one
+panel — a button, a stats row and a steps block — each of which looked
+correctly wired in JS. When a part toggles an element from script, give that
+element a `[hidden] { display: none }` rule in the same stylesheet, next to
+the rule that set `display` in the first place.
+
+**Every button in the sidebar header is styled by its own id.** There is no
+shared class: `#settings-open-btn`, `#shortcuts-open-btn`, `#sidebar-collapse`
+each repeat the same 24×24 chrome and the same `svg { width: 14px }`. A new
+button with no rule of its own therefore gets default button chrome and an
+`<svg>` at its 300×150 intrinsic size — which is what "the icon renders
+wrong but clicking still works" looks like. Copy the block when adding a
+button there, or the icon is the first thing anyone notices.
 
 ---
 

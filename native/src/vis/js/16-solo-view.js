@@ -599,7 +599,16 @@
             // is now a focus to solo.
             syncSoloButton();
             bumpGraphStyles();
-            focusNode(capped[0]);
+            // Frame the whole set, not its first member. Flying to `capped[0]`
+            // put one node of the answer on screen and left the rest of what
+            // had just been lit up outside the canvas, with nothing to say the
+            // highlight continued past the edge.
+            //
+            // In solo mode the set is being re-laid-out as this returns, so its
+            // current positions are not the ones to fit: `setSoloView` clears
+            // `_didFit` and the settle path frames the new arrangement once
+            // there is one.
+            if (!state.soloOnly) frameNodeSet(capped.map(n => n.id));
         }
 
         // ─── Chrome: the empty state and the "what's on screen" chip ───

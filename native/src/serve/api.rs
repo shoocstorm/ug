@@ -1215,10 +1215,16 @@ pub(crate) async fn api_capabilities(State(state): State<ServeState>) -> Respons
         .expect("chat_default poisoned")
         .clone();
     let chat_ready = chat_default.is_some() && search_ready;
+    // When the tab is the provider, say so rather than showing the user a
+    // loopback URL they never typed and cannot act on.
+    let local_llm = state.local_llm.clone();
     let chat_info = chat_default.map(|c| {
+        let in_browser = local_llm.owns(&c);
         serde_json::json!({
             "model": c.model,
             "base_url": c.base_url,
+            "in_browser": in_browser,
+            "label": local_llm.attached().map(|a| a.label).filter(|_| in_browser),
         })
     });
 
@@ -1256,6 +1262,9 @@ pub(crate) async fn api_capabilities(State(state): State<ServeState>) -> Respons
         "search_ready": search_ready,
         "chat_ready": chat_ready,
         "chat": chat_info,
+        // Whether this build can run a model inside the tab, plus the state
+        // of the one it is running. See `serve/local_llm.rs`.
+        "local_llm": super::local_llm::status_payload(&state),
         // Resolved visualization prefs for the page's own rendering. Null
         // when unset — the page falls back to its built-in defaults (three
         // under THREE_D_MAX_ELEMENTS, cosmos above; solo past SOLO_THRESHOLD).

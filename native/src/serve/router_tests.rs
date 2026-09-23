@@ -137,6 +137,19 @@ async fn router_with_mode(
     graph: &GraphData,
     graph_mode: GraphModePolicy,
 ) -> axum::Router {
+    state_with_mode(tmp, name, graph, graph_mode).await.0
+}
+
+/// As [`router_with_mode`], handing back the state as well — the in-browser
+/// model tests assert on `chat_default`, which is not visible from any route
+/// until a project is indexed enough for `/api/capabilities` to call chat
+/// ready.
+async fn state_with_mode(
+    tmp: &TempDir,
+    name: &str,
+    graph: &GraphData,
+    graph_mode: GraphModePolicy,
+) -> (axum::Router, ServeState) {
     let (ug_home, repo_root) = write_project(tmp, name, graph);
     std::env::set_var("UG_HOME", &ug_home);
     // The wizard's filesystem routes are confined to `browse_roots()`, and a
@@ -178,9 +191,10 @@ async fn router_with_mode(
         gen_jobs: Arc::new(GenJobs::new()),
         staleness: Arc::new(RwLock::new(None)),
         graph_mode,
+        local_llm: Arc::new(super::LocalLlm::new(0)),
     };
 
-    build_router(state)
+    (build_router(state.clone()), state)
 }
 
 /// GET `uri`, returning the status and the body as a string.
@@ -1870,4 +1884,222 @@ async fn a_real_repo_walks_the_function_that_changed() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["code"], json!("bad_rev"), "{body}");
+}
+
+// ---------- The browser tab as a model provider ----------
+//
+// The hub's own behaviour is tested in `local_llm_tests.rs`; what follows is
+// the HTTP surface: the headers the feature needs, the assets it loads, and
+// what attaching does to the rest of the server.
+
+/// Open the tab's event stream and *hold it open* — dropping the response
+/// body is how the server learns the tab is gone, so a test that lets it drop
+/// is a test whose model detaches underneath it.
+async fn open_event_stream(app: &axum::Router, client: &str) -> axum::response::Response {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/llm/local/events?client={client}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    res
+}
+
+#[tokio::test]
+async fn the_page_is_cross_origin_isolated() {
+    // Without these two headers `SharedArrayBuffer` is undefined, wllama
+    // silently falls back to one thread, and the local model is ~9x slower
+    // with nothing in the UI to explain why.
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let res = app
+        .clone()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        res.headers().get("cross-origin-opener-policy").unwrap(),
+        "same-origin"
+    );
+    assert_eq!(
+        res.headers().get("cross-origin-embedder-policy").unwrap(),
+        "require-corp"
+    );
+}
+
+#[tokio::test]
+async fn the_wllama_runtime_is_served_from_the_binary() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let version = crate::assets::WLLAMA_VERSION;
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/wllama/{version}/wllama.wasm"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers().get("content-type").unwrap(), "application/wasm");
+    assert!(
+        res.headers()
+            .get("cache-control")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("immutable"),
+        "8 MB re-fetched on every page load is the thing the version in the \
+         path exists to prevent"
+    );
+    assert!(
+        res.headers().get("content-encoding").is_none(),
+        "the wasm must skip the compression layer — see build_router"
+    );
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..4], b"\0asm", "that is not a WebAssembly module");
+
+    let (status, body) = get(&app, &format!("/wllama/{version}/wllama.js")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Wllama"), "the ES module did not come through");
+}
+
+#[tokio::test]
+async fn a_completion_with_no_tab_attached_is_a_503_not_a_hang() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let (status, body) = post(
+        &app,
+        "/api/llm/local/v1/chat/completions",
+        json!({ "messages": [{ "role": "user", "content": "hi" }] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert!(body.contains("in-browser"), "{body}");
+}
+
+#[tokio::test]
+async fn attaching_without_an_event_stream_is_rejected() {
+    // Otherwise the server would advertise a model that has no way to be
+    // asked anything, and every chat would 503 after the fact.
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let (status, body) = post(
+        &app,
+        "/api/llm/local/attach",
+        json!({ "client_id": "nobody", "model": "qwen3-0.6b", "n_ctx": 4096 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn attaching_takes_over_chat_and_detaching_hands_it_back() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let (app, state) = state_with_mode(&tmp, "demo", &sample_graph(), GraphModePolicy::Auto).await;
+
+    // Someone already has a hosted endpoint configured. Turning the browser
+    // model on must not lose it.
+    let hosted = crate::chat::ChatConfig::with_overrides(
+        Some("https://api.example.com/v1".into()),
+        Some("sk-test".into()),
+        Some("gpt-4o-mini".into()),
+        None,
+        None,
+        None,
+    );
+    *state.chat_default.write().unwrap() = Some(hosted.clone());
+
+    let _stream = open_event_stream(&app, "tab-1").await;
+    let (status, body) = post(
+        &app,
+        "/api/llm/local/attach",
+        json!({
+            "client_id": "tab-1",
+            "model": "qwen3-0.6b",
+            "label": "Qwen3 0.6B",
+            "n_ctx": 4096,
+            "supports_tools": true,
+            "backend": "webgpu",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    {
+        let cfg = state.chat_default.read().unwrap().clone().expect("attached");
+        assert!(
+            cfg.base_url.contains("/api/llm/local/v1"),
+            "chat should now go through the tab: {}",
+            cfg.base_url
+        );
+    }
+
+    let (status, caps) = get(&app, "/api/capabilities").await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&caps).unwrap();
+    assert_eq!(v["chat"]["in_browser"], json!(true), "{caps}");
+    assert_eq!(v["chat"]["label"], json!("Qwen3 0.6B"), "{caps}");
+    assert_eq!(v["local_llm"]["attached"]["n_ctx"], json!(4096), "{caps}");
+    assert_eq!(v["local_llm"]["attached"]["backend"], json!("webgpu"), "{caps}");
+    assert!(
+        v["local_llm"]["runtime"]["wasm"]
+            .as_str()
+            .unwrap()
+            .contains(crate::assets::WLLAMA_VERSION),
+        "the page is told where to fetch the runtime: {caps}"
+    );
+
+    let (status, body) = post(&app, "/api/llm/local/detach", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let restored = state.chat_default.read().unwrap().clone().expect("restored");
+    assert_eq!(restored.base_url, hosted.base_url);
+    assert_eq!(restored.model, hosted.model);
+    assert_eq!(
+        restored.api_key, hosted.api_key,
+        "the user's key must survive a round trip through the browser model"
+    );
+}
+
+#[tokio::test]
+async fn re_attaching_does_not_make_the_bridge_its_own_fallback() {
+    // A page reload attaches a second time while the first attachment is
+    // still in force. Recording *that* as the displaced config would make
+    // detaching restore the bridge — chat pointing at a tab that has gone.
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let (app, state) = state_with_mode(&tmp, "demo", &sample_graph(), GraphModePolicy::Auto).await;
+
+    let _stream = open_event_stream(&app, "tab-1").await;
+    let attach = |client: &str| {
+        json!({ "client_id": client, "model": "qwen3-0.6b", "n_ctx": 4096 })
+    };
+    for _ in 0..2 {
+        let (status, body) = post(&app, "/api/llm/local/attach", attach("tab-1")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    post(&app, "/api/llm/local/detach", json!({})).await;
+    assert!(
+        state.chat_default.read().unwrap().is_none(),
+        "nothing was configured before, so nothing should be configured after"
+    );
 }

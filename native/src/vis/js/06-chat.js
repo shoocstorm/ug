@@ -1077,12 +1077,20 @@
                     p1.textContent = endpoint
                         ? `Nothing answered at ${endpoint}. Start your local model server, or point UltraGraph somewhere else — everything else here keeps working in the meantime.`
                         : 'Start your local model server, or point UltraGraph somewhere else — everything else here keeps working in the meantime.';
+                    // An endpoint that is down is the moment the in-browser
+                    // model is most useful, so it leads: one click and there
+                    // is something answering again, with nothing to configure.
+                    const local = document.createElement('button');
+                    local.type = 'button';
+                    local.className = 'cap-cta';
+                    local.textContent = 'Run a model in this browser';
+                    local.addEventListener('click', () => llmOpen());
                     const cta = document.createElement('button');
                     cta.type = 'button';
-                    cta.className = 'cap-cta';
+                    cta.className = 'cap-cta ghost';
                     cta.textContent = 'Check model settings';
                     cta.addEventListener('click', () => openSettings());
-                    box.append(head, p1, cta);
+                    box.append(head, p1, local, cta);
                     bodyEl.appendChild(box);
                 },
             };

@@ -5949,7 +5949,6 @@
             margin-top: 6px;
             padding: 9px 10px;
             background: var(--bg-elevated);
-            border: 1px solid var(--border-soft);
             border-radius: 7px;
         }
 
@@ -10368,9 +10367,480 @@ body:has(#info.visible) #perf-hud {
             opacity: 0.85;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         }
+/* ==== 22-local-llm.css ==== */
+        /* ── Model in this browser (js/28-local-llm.js) ──────────────
+           The panel reuses the settings overlay's chrome — same backdrop,
+           same head, same buttons — so it reads as one app rather than a
+           bolt-on. Everything below is only the parts settings has no
+           equivalent of: the live status strip, the capability chips and
+           the model cards. */
+
+        .llm-panel {
+            max-width: 680px;
+        }
+
+        /* The status strip sits between the head and the body, above the
+           scroll, because it is the one thing that must stay visible while
+           you scroll a list of models. */
+        .llm-status {
+            padding: 12px 22px 14px;
+            border-bottom: 1px solid var(--border-soft);
+            background: rgba(var(--accent-rgb), 0.04);
+        }
+
+        .llm-status-line {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .llm-status-text {
+            flex: 1;
+            font-size: 13px;
+            color: var(--text-soft);
+        }
+
+        .llm-stop {
+            flex: none;
+        }
+
+        /* The `hidden` attribute is only a user-agent `display: none`, so any
+           rule here that sets `display` outranks it and the element the
+           script "hid" stays on screen. Everything in this panel that is
+           toggled from JS *and* has a display of its own is listed here —
+           add to this list when you add another. */
+        .settings-btn[hidden],
+        .llm-steps[hidden],
+        .llm-facts[hidden],
+        .llm-progress[hidden] {
+            display: none;
+        }
+
+        .llm-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            flex: none;
+            background: var(--text-dim);
+        }
+
+        .llm-dot.live {
+            background: var(--accent);
+            box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+        }
+
+        .llm-dot.busy {
+            background: var(--warning);
+            animation: llm-pulse 1.1s ease-in-out infinite;
+        }
+
+        .llm-dot.warn {
+            background: var(--warning);
+        }
+
+        .llm-dot.error {
+            background: var(--danger);
+        }
+
+        @keyframes llm-pulse {
+            50% {
+                opacity: 0.35;
+            }
+        }
+
+        .llm-progress {
+            margin-top: 10px;
+        }
+
+        .llm-bar {
+            height: 5px;
+            border-radius: 999px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            overflow: hidden;
+        }
+
+        .llm-bar-fill {
+            height: 100%;
+            width: 0;
+            background: var(--accent);
+            transition: width 0.25s ease;
+        }
+
+        .llm-progress-meta {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 5px;
+            font-size: 11px;
+            font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+            color: var(--text-muted);
+        }
+
+        .llm-facts {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            margin-top: 10px;
+            font-size: 11.5px;
+            color: var(--text-muted);
+        }
+
+        .llm-facts b {
+            color: var(--text-soft);
+            font-weight: 600;
+        }
+
+        .llm-body {
+            padding-top: 16px;
+        }
+
+        /* What this browser can actually do. Shown before the model list
+           because "single thread" is the difference between a model that is
+           pleasant and one that is not, and it is better read before the
+           download than after it. */
+        .llm-env {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 18px;
+        }
+
+        .llm-chip {
+            font-size: 11px;
+            padding: 4px 9px;
+            border-radius: 999px;
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            cursor: help;
+        }
+
+        .llm-chip.ok {
+            color: var(--accent-soft);
+            border-color: rgba(var(--accent-rgb), 0.35);
+        }
+
+        .llm-chip.off {
+            color: var(--warning);
+            border-color: rgba(251, 191, 36, 0.3);
+        }
+
+        .llm-section {
+            margin: 0 0 10px;
+            font-size: 11px;
+            letter-spacing: 1.1px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            font-weight: 600;
+        }
+
+        .llm-models {
+            list-style: none;
+            margin: 0 0 18px;
+            padding: 0;
+            display: grid;
+            gap: 9px;
+        }
+
+        .llm-model {
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            padding: 12px 14px;
+            background: var(--bg-elevated);
+        }
+
+        .llm-model.active {
+            border-color: rgba(var(--accent-rgb), 0.45);
+            background: rgba(var(--accent-rgb), 0.07);
+        }
+
+        .llm-model-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .llm-model-name {
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .llm-model-quant,
+        .llm-model-size {
+            font-size: 11px;
+            font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+            color: var(--text-dim);
+        }
+
+        .llm-model-size {
+            margin-left: auto;
+        }
+
+        .llm-badge {
+            font-size: 10px;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            padding: 3px 7px;
+            border-radius: 999px;
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+        }
+
+        .llm-badge.rec {
+            color: var(--accent-soft);
+            border-color: rgba(var(--accent-rgb), 0.35);
+        }
+
+        .llm-badge.cached {
+            color: var(--text-soft);
+        }
+
+        .llm-badge.live {
+            color: var(--accent-ink);
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .llm-model-blurb {
+            margin: 6px 0 0;
+            font-size: 12.5px;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+
+        .llm-model-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .llm-model-actions .settings-btn {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .settings-btn.danger {
+            color: var(--danger);
+        }
+
+        .llm-custom,
+        .llm-advanced {
+            border-top: 1px solid var(--border-soft);
+            padding-top: 12px;
+            margin-top: 4px;
+        }
+
+        .llm-custom > summary,
+        .llm-advanced > summary {
+            cursor: pointer;
+            font-size: 12.5px;
+            color: var(--text-soft);
+            list-style: none;
+        }
+
+        .llm-custom > summary::before,
+        .llm-advanced > summary::before {
+            content: '▸';
+            display: inline-block;
+            width: 14px;
+            color: var(--text-dim);
+        }
+
+        .llm-custom[open] > summary::before,
+        .llm-advanced[open] > summary::before {
+            transform: rotate(90deg);
+        }
+
+        .llm-hint {
+            font-size: 11.5px;
+            line-height: 1.55;
+            color: var(--text-dim);
+            margin: 8px 0;
+        }
+
+        .llm-custom-row {
+            display: flex;
+            gap: 8px;
+            margin: 8px 0 4px;
+        }
+
+        .llm-custom-row input {
+            flex: 1;
+            min-width: 0;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            padding: 7px 10px;
+            color: var(--text);
+            font: inherit;
+            font-size: 12.5px;
+        }
+
+        .llm-custom-row input:focus {
+            outline: none;
+            border-color: rgba(var(--accent-rgb), 0.5);
+        }
+
+        .llm-opt {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 10px 0;
+            font-size: 12.5px;
+            color: var(--text-soft);
+        }
+
+        .llm-opt.checkbox {
+            align-items: flex-start;
+        }
+
+        .llm-opt select {
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            color: var(--text);
+            padding: 6px 9px;
+            font: inherit;
+            font-size: 12.5px;
+        }
+
+        .llm-opt input[type="checkbox"] {
+            accent-color: var(--accent);
+            margin-top: 2px;
+        }
+
+        .llm-foot {
+            font-size: 11.5px;
+        }
+
+        /* Three lines of "what happens if I click this", shown only while
+           nothing is running. The download is hundreds of megabytes and the
+           first question people have is what it costs them. */
+        .llm-steps {
+            display: grid;
+            gap: 8px;
+            margin: 0 0 18px;
+            padding: 12px 14px;
+            border: 1px dashed var(--border-soft);
+            border-radius: 12px;
+            background: var(--bg-elevated);
+        }
+
+        .llm-step {
+            display: flex;
+            gap: 10px;
+            align-items: baseline;
+            font-size: 12.5px;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+
+        .llm-step b {
+            color: var(--text-soft);
+            font-weight: 600;
+        }
+
+        .llm-step-n {
+            flex: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+            color: var(--accent-ink);
+            background: var(--accent);
+            align-self: flex-start;
+        }
+
+        .llm-next {
+            flex: none;
+            margin-left: auto;
+        }
+
+        /* The always-visible tells: a dot on the sidebar button, and the
+           model pill in the Ask column. Both exist so that "my browser is
+           doing the work" is never a surprise. */
+
+        /* Every button in the sidebar header is styled by its own id — there
+           is no shared class — so a new one with no rule of its own falls
+           back to the browser's default button chrome, and its `<svg>` to the
+           300x150 default intrinsic size. That is why this block is not
+           optional: without it the icon renders enormous and clipped. */
+        #llm-open-btn {
+            position: relative;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        #llm-open-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+        }
+
+        #llm-open-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* Running: the button itself carries the accent, not just the dot. */
+        #llm-open-btn.live {
+            color: var(--accent);
+        }
+
+        .llm-btn-dot {
+            position: absolute;
+            top: 1px;
+            right: 1px;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 1px solid var(--bg-surface);
+        }
+
+        .llm-btn-dot.busy {
+            background: var(--warning);
+            animation: llm-pulse 1.1s ease-in-out infinite;
+        }
+
+        .llm-btn-dot.working {
+            animation: llm-pulse 0.7s ease-in-out infinite;
+        }
+
+        .sem-dest-badge.in-browser {
+            cursor: pointer;
+            border-color: rgba(var(--accent-rgb), 0.4);
+            color: var(--accent-soft);
+        }
+
+        .cap-cta.ghost {
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            color: var(--text-soft);
+        }
+
+        /* A retrieval input the local model's window is holding down. The
+           tooltip says by how much and why; this is just the tell that the
+           number on screen is not the one you set. */
+        .chat-num.llm-capped {
+            border-color: rgba(var(--accent-rgb), 0.45);
+            color: var(--accent-soft);
+        }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.21","visFingerprint":"65016b2d6a2b9a0a","generatedAt":1789914193};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.21","visFingerprint":"b8894af78b1688f9","generatedAt":1790169103};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -11059,6 +11529,129 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
          GET /api/config and saved via POST /api/config. CLI flags and
          env vars still outrank saved values — rows show a chip + note
          when that's happening so overrides are never silent. -->
+    <!-- ── Run a model in this browser ─────────────────────────────────
+         The panel for wllama: pick a GGUF, watch it download into OPFS,
+         hand it to the server as its chat endpoint. Shares the settings
+         overlay's chrome so it reads as part of the same app; everything
+         inside it is `llm-*`. Driven by js/28-local-llm.js. -->
+    <div id="llm-overlay" class="settings-overlay">
+        <div class="settings-panel llm-panel" role="dialog" aria-modal="true" aria-labelledby="llm-title">
+            <div class="settings-head">
+                <div class="settings-head-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="4" y="4" width="16" height="16" rx="3" />
+                        <rect x="9" y="9" width="6" height="6" rx="1" />
+                        <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" />
+                    </svg>
+                </div>
+                <div class="settings-head-text">
+                    <h2 id="llm-title">Model in this browser</h2>
+                    <p>Download a small model once and run it here — no API key, no server, nothing leaves this machine</p>
+                </div>
+                <button type="button" class="settings-close" id="llm-close" title="Close (Esc)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- What is happening right now: off, downloading, loading, live. -->
+            <div class="llm-status" id="llm-status">
+                <div class="llm-status-line">
+                    <span class="llm-dot" id="llm-status-dot"></span>
+                    <span class="llm-status-text" id="llm-status-text">Checking this browser…</span>
+                    <button type="button" class="settings-btn ghost llm-stop" id="llm-stop" hidden>Stop using it</button>
+                </div>
+                <div class="llm-progress" id="llm-progress" hidden>
+                    <div class="llm-bar"><div class="llm-bar-fill" id="llm-bar-fill"></div></div>
+                    <div class="llm-progress-meta">
+                        <span id="llm-progress-label"></span>
+                        <span id="llm-progress-pct"></span>
+                    </div>
+                </div>
+                <div class="llm-facts" id="llm-facts" hidden></div>
+            </div>
+
+            <div class="settings-body llm-body" id="llm-body">
+                <div class="llm-steps" id="llm-steps">
+                    <div class="llm-step"><span class="llm-step-n">1</span>
+                        <span><b>Pick a model below.</b> It downloads once into this
+                            browser's own storage and is reused every time after
+                            that — start with the 138 MB one if you just want to
+                            see it work.</span></div>
+                    <div class="llm-step"><span class="llm-step-n">2</span>
+                        <span><b>It starts here, in this tab.</b> UltraGraph then uses
+                            it for Answer, Tours and Walks — same questions, same
+                            citations, no API key and no model server.</span></div>
+                    <div class="llm-step"><span class="llm-step-n">3</span>
+                        <span><b>Nothing leaves this machine</b>, and once the weights
+                            are downloaded it works offline. Closing this tab stops
+                            the model.</span></div>
+                </div>
+                <div class="llm-env" id="llm-env"></div>
+
+                <h3 class="llm-section">Models</h3>
+                <ul class="llm-models" id="llm-models"></ul>
+
+                <details class="llm-custom" id="llm-custom">
+                    <summary>Load any GGUF from Hugging Face</summary>
+                    <p class="llm-hint">
+                        Paste a repo and the file inside it. Instruction-tuned
+                        models with a chat template work; base models will
+                        answer, but not usefully.
+                    </p>
+                    <div class="llm-custom-row">
+                        <input type="text" id="llm-custom-repo" placeholder="owner/repo" spellcheck="false" autocomplete="off">
+                        <input type="text" id="llm-custom-file" placeholder="model-Q4_K_M.gguf" spellcheck="false" autocomplete="off">
+                        <button type="button" class="settings-btn secondary" id="llm-custom-add">Add</button>
+                    </div>
+                </details>
+
+                <details class="llm-advanced" id="llm-advanced">
+                    <summary>Advanced</summary>
+                    <label class="llm-opt">
+                        <span>Context window</span>
+                        <!-- Labels are rewritten from the server's own budget
+                             (llmRenderCtxOptions) so they cannot drift from it. -->
+                        <select id="llm-ctx">
+                            <option value="2048">2048 tokens</option>
+                            <option value="4096">4096 tokens</option>
+                            <option value="8192" selected>8192 tokens</option>
+                            <option value="16384">16384 tokens</option>
+                        </select>
+                    </label>
+                    <p class="llm-hint" id="llm-ctx-hint"></p>
+                    <label class="llm-opt checkbox">
+                        <input type="checkbox" id="llm-gpu" checked>
+                        <span>Use the GPU through WebGPU when it is available</span>
+                    </label>
+                    <label class="llm-opt checkbox">
+                        <input type="checkbox" id="llm-tools">
+                        <span>Let this model drive ug's graph tools — search, read, find usages — itself</span>
+                    </label>
+                    <p class="llm-hint" id="llm-tools-hint"></p>
+                    <label class="llm-opt checkbox">
+                        <input type="checkbox" id="llm-think">
+                        <span>Let the model think before answering — better answers, much slower</span>
+                    </label>
+                    <label class="llm-opt checkbox">
+                        <input type="checkbox" id="llm-auto" checked>
+                        <span>Start the last model automatically when this page opens</span>
+                    </label>
+                </details>
+            </div>
+
+            <div class="settings-foot llm-foot">
+                <span class="settings-status" id="llm-foot-status">
+                    While a model runs here, Answer, Tours and Walks are generated in this tab.
+                </span>
+                <button type="button" class="settings-btn primary llm-next" id="llm-goto-ask" hidden>
+                    Ask something now
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div id="settings-overlay" class="settings-overlay">
         <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <div class="settings-head">
@@ -11583,6 +12176,15 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                             <line x1="12" y1="17" x2="12.01" y2="17" />
                         </svg>
                     </button>
+                    <button id="llm-open-btn" title="Run a language model in this browser" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="4" y="4" width="16" height="16" rx="3" />
+                            <rect x="9" y="9" width="6" height="6" rx="1" />
+                            <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" />
+                        </svg>
+                        <span class="llm-btn-dot" id="llm-btn-dot" hidden></span>
+                    </button>
                     <button id="settings-open-btn" title="Settings (model, endpoints)" type="button">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round">
@@ -11817,14 +12419,16 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                             UltraGraph at any OpenAI-compatible endpoint — a local one (Ollama,
                             LM Studio, llama.cpp) or a hosted API — and it turns on straight
                             away. Nothing else here needs it.
-                            <button class="cap-cta" type="button" data-open-settings>Set up a model</button>
+                            <button class="cap-cta" type="button" data-open-llm>Run one in this browser</button>
+                            <button class="cap-cta ghost" type="button" data-open-settings>Use my own endpoint</button>
                         </div>
                         <!-- Tours still run without a model; only the narration needs one. -->
                         <div class="cap-banner warn" id="tour-nollm-msg" hidden>
                             <strong>No language model configured.</strong>
                             Tours still run — you'll get the most relevant stops in ranked order —
                             but the guide can't write the narration or order the route into a story.
-                            <button class="cap-cta" type="button" data-open-settings>Set up a model</button>
+                            <button class="cap-cta" type="button" data-open-llm>Run one in this browser</button>
+                            <button class="cap-cta ghost" type="button" data-open-settings>Use my own endpoint</button>
                         </div>
                     </div>
 
@@ -16231,7 +16835,16 @@ self.onmessage = async (ev) => {
         // 200,000. Nothing re-runs that decision once the real value lands.
         // See P12.6 in docs/dev/PERF-TUNING-JOURNEY.md.
         let capabilitiesPromise = null;
-        function getCapabilities() {
+        /// `force` re-fetches instead of handing back the memoized answer.
+        ///
+        /// The memo is right for the many callers that just want to know what
+        /// the server could do at page load, and wrong for every caller that
+        /// has just *changed* what the server can do: an ingest that gave it
+        /// vectors, or a model attaching from the browser. Those got the
+        /// pre-change payload back and re-rendered the banner they were
+        /// trying to retire.
+        function getCapabilities(force) {
+            if (force) capabilitiesPromise = null;
             if (!capabilitiesPromise) {
                 capabilitiesPromise = fetch('/api/capabilities')
                     .then(res => (res.ok ? res.json() : null))
@@ -16244,7 +16857,7 @@ self.onmessage = async (ev) => {
             return capabilitiesPromise;
         }
 
-        async function probeCapabilities() {
+        async function probeCapabilities(force) {
             const dot = document.querySelector('.sidebar-header .brand-dot');
 
             // Four banner slots, at most one of the first three shown. They
@@ -16260,7 +16873,7 @@ self.onmessage = async (ev) => {
             const show = (el, on) => { if (el) el.hidden = !on; };
 
             try {
-                const caps = await getCapabilities();
+                const caps = await getCapabilities(force);
                 if (!caps) throw new Error('capabilities unavailable');
                 state.capabilities = caps;
 
@@ -16310,6 +16923,11 @@ self.onmessage = async (ev) => {
                     chatBadgePill.title = `Chat model: ${caps.chat.model}\nBase URL: ${caps.chat.base_url || '?'}`;
                 }
 
+                // A model running in this tab is also a chat model, and it is
+                // the one the two banners above are offering. It rewrites the
+                // badge with something a human recognises. (js/28-local-llm.js)
+                llmOnCapabilities(caps);
+
                 // The trail and the tour history both survive page loads and
                 // both key on the project, so neither can be read until
                 // capabilities have named it.
@@ -16323,6 +16941,7 @@ self.onmessage = async (ev) => {
                 renderAskOrient();
             } catch (err) {
                 state.capabilities = { db_ready: false, embedder_ready: false, search_ready: false, chat_ready: false };
+                llmOnCapabilities(null);
                 if (semNote) semNote.textContent = 'Capabilities probe failed — server unreachable?';
                 show(semNote, true);
                 show(noEmb, false);
@@ -16453,7 +17072,9 @@ self.onmessage = async (ev) => {
                     // re-probe; probeCapabilities hides the banner once
                     // search_ready flips true.
                     setTimeout(async () => {
-                        await probeCapabilities();
+                        // Force: the whole point is that `search_ready` just
+                        // changed, and the memoized answer predates it.
+                        await probeCapabilities(true);
                         finishIngest(false);
                     }, 600);
                 } else {
@@ -18517,12 +19138,20 @@ self.onmessage = async (ev) => {
                     p1.textContent = endpoint
                         ? `Nothing answered at ${endpoint}. Start your local model server, or point UltraGraph somewhere else — everything else here keeps working in the meantime.`
                         : 'Start your local model server, or point UltraGraph somewhere else — everything else here keeps working in the meantime.';
+                    // An endpoint that is down is the moment the in-browser
+                    // model is most useful, so it leads: one click and there
+                    // is something answering again, with nothing to configure.
+                    const local = document.createElement('button');
+                    local.type = 'button';
+                    local.className = 'cap-cta';
+                    local.textContent = 'Run a model in this browser';
+                    local.addEventListener('click', () => llmOpen());
                     const cta = document.createElement('button');
                     cta.type = 'button';
-                    cta.className = 'cap-cta';
+                    cta.className = 'cap-cta ghost';
                     cta.textContent = 'Check model settings';
                     cta.addEventListener('click', () => openSettings());
-                    box.append(head, p1, cta);
+                    box.append(head, p1, local, cta);
                     bodyEl.appendChild(box);
                 },
             };
@@ -21623,6 +22252,26 @@ self.onmessage = async (ev) => {
         // selectionRing / gizmo state.
         let threeGen = 0;
 
+        // ── Zoom stops ─────────────────────────────────────────
+        //
+        // Distances are orbit radii in layout units. At the camera's 50° FOV a
+        // distance of `d` shows about `0.93 × d` units of height, and the
+        // layout's link distance is 50 — so a distance reads most usefully as
+        // a number of hops.
+        //
+        // OrbitControls starts at [0, ∞]: the dolly runs straight through the
+        // node it is orbiting, and out until the graph is a speck. The near
+        // stop is absolute (a node's sticker disc is ~19 units across, so 60
+        // frames two of them and there is nothing further in to see); the far
+        // one has to follow the graph, and is set with the fog in
+        // `applyDepthCues`.
+        const THREE_MIN_DIST = 60;
+        // Multiples of the graph's own radius: far enough out that the whole
+        // thing is a small island, and no closer than a stop that would fight
+        // `threeSetView`, whose portrait-aspect fit reaches ~4.5 × radius.
+        const THREE_MAX_DIST_FACTOR = 8;
+        const THREE_MAX_DIST_FLOOR = 2500;
+
         // A soft circular glow texture (white radial gradient → transparent),
         // tinted per-node via the sprite colour. Built once and shared.
         function glowTexture() {
@@ -22080,6 +22729,12 @@ self.onmessage = async (ev) => {
                 .width(width)
                 .height(height);
 
+            // The near stop is absolute, so it is live from the first frame.
+            // The far one needs a laid-out graph to be a share of and is set
+            // by `applyDepthCues`, which runs on every settle.
+            const orbit = Graph.controls && Graph.controls();
+            if (orbit) orbit.minDistance = THREE_MIN_DIST;
+
             const charge = Graph.d3Force('charge');
             if (charge) charge.strength(-70);
             // shorter Link distance, means closer connected nodes
@@ -22190,6 +22845,14 @@ self.onmessage = async (ev) => {
             // Labels visible within ~half the graph radius of the camera; never
             // below the small-graph default so tiny graphs keep their labels.
             state._labelDist = Math.max(340, ext.radius * 0.5);
+            // The far zoom stop travels with the graph for the same reason the
+            // fog does: "too far out" is a statement about the graph's size,
+            // not about a number of units.
+            const controls = Graph && Graph.controls && Graph.controls();
+            if (controls) {
+                controls.minDistance = THREE_MIN_DIST;
+                controls.maxDistance = Math.max(THREE_MAX_DIST_FLOOR, ext.radius * THREE_MAX_DIST_FACTOR);
+            }
             const fog = Graph && Graph.scene().fog;
             if (fog) {
                 // Exponential fade into the paper-white, keyed to size — this is
@@ -22251,7 +22914,15 @@ self.onmessage = async (ev) => {
             });
             // Clamped so a lone node isn't framed from inside it, and a sprawling
             // neighbourhood doesn't push the camera out past the whole graph.
-            const d = Math.max(300, Math.min(1500, radius * 2 + 200)) / Math.sqrt(3);
+            //
+            // The ceiling follows the graph rather than being a flat 1,500:
+            // "light up these fifty nodes" on a large repo spreads them across
+            // most of it, and a fixed cap left the camera inside the set it had
+            // been asked to frame — the nodes it was pointed at ended up behind
+            // it. Never below the flat number, so nothing gets tighter than it
+            // was on a small graph.
+            const far = Math.max(1500, (state._graphRadius || 0) * 2.5);
+            const d = Math.max(300, Math.min(far, radius * 2 + 200)) / Math.sqrt(3);
             Graph.cameraPosition(
                 { x: centre.x + d, y: centre.y + d * 0.8, z: centre.z + d },
                 centre,
@@ -22409,9 +23080,18 @@ self.onmessage = async (ev) => {
             requestAnimationFrame(() => {
                 const x = +n.x || 0, y = +n.y || 0, z = +n.z || 0;
                 // Total camera-to-node distance (the (d,d,d) offset has magnitude
-                // sqrt(3)*d). Pulled well back so a generous slice of the
-                // surrounding neighbourhood stays in frame on focus.
-                const d = 480 / Math.sqrt(3);
+                // sqrt(3)*d). A share of the graph's own radius, so "zoom to
+                // this node" is the same step in on a 200-node repo as on a
+                // 100k one; a fixed 480 units was a comfortable slice of a
+                // small graph and a nosedive into a large one, where it framed
+                // a handful of nodes with nothing around them to place it.
+                // Clamped so a tiny graph is not framed from orbit, and a
+                // sprawling one does not leave the camera on the far side of
+                // itself. `_graphRadius` is the 90th-percentile extent kept by
+                // applyDepthCues; absent (no layout yet) it falls back to the
+                // distance this used to fly to unconditionally.
+                const radius = state._graphRadius || 520;
+                const d = Math.max(620, Math.min(1500, radius * 1.1)) / Math.sqrt(3);
                 Graph.cameraPosition(
                     { x: x + d, y: y + d, z: z + d },
                     { x, y, z },
@@ -22431,8 +23111,13 @@ self.onmessage = async (ev) => {
             const p = cam.position;
             const dx = p.x - t.x, dy = p.y - t.y, dz = p.z - t.z;
             const dist = Math.hypot(dx, dy, dz) || 1;
-            // Floor so the camera can't cross the orbit target.
-            const newDist = Math.max(dist * factor, Math.max(dist * 0.05, 2));
+            // The same stops the wheel obeys. OrbitControls would clamp this
+            // on its next update() anyway, but not until the tween below had
+            // already flown past them — so the button and the wheel would
+            // disagree about where the end of the zoom is.
+            const far = (typeof controls.maxDistance === 'number' && Number.isFinite(controls.maxDistance))
+                ? controls.maxDistance : Infinity;
+            const newDist = Math.min(far, Math.max(dist * factor, THREE_MIN_DIST));
             const k = newDist / dist;
             Graph.cameraPosition(
                 { x: t.x + dx * k, y: t.y + dy * k, z: t.z + dz * k },
@@ -23605,6 +24290,51 @@ self.onmessage = async (ev) => {
         // circle seeding in transformData lands well inside it.
         const COSMOS_SPACE = 4096;
 
+        // ── Zoom stops ─────────────────────────────────────────
+        //
+        // `k` here is screen pixels per space unit — `rescalePositions` is
+        // off, so the simulation's own coordinates *are* the space, and the
+        // whole of it is COSMOS_SPACE units across.
+        //
+        // cosmos.gl hands d3-zoom a scale extent of [0.001, ∞], which is no
+        // limit at all in either direction: the wheel takes the graph down to
+        // a four-pixel smudge, or past the point where zooming in stops
+        // looking closer (`convertSpaceToScreenRadius` caps a point's screen
+        // size at `maxPointSize`, so beyond ~12 the nodes stop growing and the
+        // view merely spreads).
+        //
+        // The extent is also the one lever that bounds every *programmatic*
+        // fit: `Zoom.getTransform` clamps the scale it computes to it. That is
+        // what stops `fitViewByPointIndices` slamming the camera into a
+        // two-node set — cosmos.gl widens a degenerate extent by half a unit
+        // and fits that, which without a ceiling is a zoom of several hundred.
+        //
+        // Out: the whole space may not shrink below 180 px on screen. A graph
+        // that fills the space fits whole at `0.7 × shortSide / 4096`
+        // (fitView's padding is 0.15 a side), which stays above this floor for
+        // any canvas taller than ~257 px — so the stop can never prevent the
+        // graph being framed whole.
+        const COSMOS_MIN_ZOOM = 180 / COSMOS_SPACE;
+        // In: a default point is 6 units and draws at `2 × size × k` px, so 12
+        // is a ~144 px disc — about where `maxPointSize` takes over anyway.
+        const COSMOS_MAX_ZOOM = 12;
+        // Where a focus flight settles. It was 4, which puts ~200 space units
+        // across an 800 px canvas: the node, its immediate neighbours, and
+        // nothing that says where in the graph any of it is. The layout's link
+        // distance is a constant 50 whatever the repo's size, so a fixed
+        // pixels-per-unit zoom frames a constant number of *hops* — 1.6 is
+        // about fourteen of them.
+        const COSMOS_FOCUS_ZOOM = 1.6;
+
+        // Guarded, because `zoomInstance` is cosmos.gl's own field name and
+        // nothing declares it: a re-vendor that renames it degrades to the
+        // library's unbounded default rather than throwing on page load.
+        function cosmosClampZoom() {
+            const behavior = cosmos && cosmos.zoomInstance && cosmos.zoomInstance.behavior;
+            if (!behavior || typeof behavior.scaleExtent !== 'function') return;
+            behavior.scaleExtent([COSMOS_MIN_ZOOM, COSMOS_MAX_ZOOM]);
+        }
+
         // Additive blending for links — richer where strands overlap, and at
         // high resolution the single biggest cost in every frame.
         //
@@ -23742,14 +24472,22 @@ self.onmessage = async (ev) => {
 
         // Build one image per (type × boundary direction) actually present in
         // the view. Types the graph doesn't contain cost nothing.
+        //
+        // A boundary node's *ringless* variant is carried too, even when no
+        // plain node of that type is in the view: it is what the node wears
+        // while it is dimmed (see `cosmosGlyphIndexFor`), and a type whose only
+        // members are boundaries would otherwise have nothing to fall back to.
         function cosmosBuildAtlas(nodes) {
             const keys = [];
             cosmosImageIndex = new Map();
-            for (const n of nodes) {
-                const k = cosmosImageKey(n);
-                if (cosmosImageIndex.has(k)) continue;
+            const add = (k) => {
+                if (cosmosImageIndex.has(k)) return;
                 cosmosImageIndex.set(k, keys.length);
                 keys.push(k);
+            };
+            for (const n of nodes) {
+                add(cosmosImageKey(n));
+                if (n.isBoundary) add(n.group);
             }
             cosmos.setImageData(keys.map(cosmosGlyphImage));
         }
@@ -23855,7 +24593,7 @@ self.onmessage = async (ev) => {
                 positions[i * 2] = +node.x || 0;
                 positions[i * 2 + 1] = +node.y || 0;
                 shapes[i] = cosmosShapeFor(node.group);
-                imageIdx[i] = cosmosImageIndex.get(cosmosImageKey(node)) ?? -1;
+                imageIdx[i] = cosmosGlyphIndexFor(node);
                 sizes[i] = nodeRadiusFor(node);
                 imageSizes[i] = sizes[i] * cosmosGlyphFit(node.group);
             }
@@ -23871,9 +24609,11 @@ self.onmessage = async (ev) => {
             cosmos.setLinkColors(cosmosBuf.linkColors);
             cosmos.setLinkWidths(cosmosBuf.linkWidths);
             cosmosHitInvalidate();
-            // A new point set: whatever was pushed described the old one.
+            // A new point set: whatever was pushed described the old one, and
+            // the boundary indices described its ordering.
             _hlFocus = -2;
             _hlOutlined = undefined;
+            _hlBoundary = null;
         }
 
         // Refresh the colour/width buffers from the shared style rules. Alpha
@@ -24700,15 +25440,99 @@ self.onmessage = async (ev) => {
         // where the point set itself changes underneath both.
         let _hlFocus = -2;          // -2 is "nothing pushed yet"; undefined is a real value
         let _hlOutlined;
+        // Which points are boundary nodes. A property of the graph, not of what
+        // is on screen, so it is scanned once per build rather than on every
+        // restyle — which meant walking all 485,175 points on every hover to
+        // rebuild a list that cannot have changed.
+        let _hlBoundary = null;
+
+        function cosmosBoundaryIndices() {
+            if (_hlBoundary) return _hlBoundary;
+            _hlBoundary = [];
+            for (let i = 0; i < cosmosNodes.length; i++) {
+                if (cosmosNodes[i].isBoundary) _hlBoundary.push(i);
+            }
+            return _hlBoundary;
+        }
+
+        // The boundary nodes that still carry their ring: dimmed ones lose it,
+        // the same way the 3D renderer fades `__boundaryRing` to zero.
+        //
+        // cosmos.gl draws the outline from a *uniform* colour whose alpha is
+        // fixed, and `ringAlpha` in the point shader is purely geometric — the
+        // point's own alpha, which is where all of this page's dimming lives,
+        // never reaches it. (The shader *does* fade a ring, but only for
+        // points greyed out through cosmos.gl's own greyout path, which we do
+        // not use: see `pointOcclusionCulling` in the mount config for why the
+        // dimming is carried in the colour alpha instead.) So a focus, a tour,
+        // a walk or a context pack dimmed the whole graph and left every
+        // boundary node ringed at full strength — reading as "these are the
+        // relevant ones", which is the opposite of what the dimming says.
+        //
+        // Membership is the only lever there is, so it is the one used.
+        // `nodeLightingFor` is evaluated over the boundary nodes alone rather
+        // than the graph, so this stays bounded by how many there are.
+        function cosmosOutlinedIndices() {
+            const out = [];
+            for (const i of cosmosBoundaryIndices()) {
+                if (!nodeLightingFor(cosmosNodes[i]).dim) out.push(i);
+            }
+            return out;
+        }
+
+        // Which atlas image a node wears. The dashed boundary rim is *baked
+        // into the glyph image* (`cosmosGlyphImage`) because a point image
+        // cannot exceed its own quad the way the 3D ring sprite can — and an
+        // image is the one thing on a point that this page's dimming cannot
+        // reach.
+        //
+        // cosmos.gl's point shader does
+        //
+        //     finalPointAlpha = max(finalShapeColor.a, finalImageColor.a);
+        //     fragColor = vec4(mix(shape.rgb, image.rgb, image.a), finalPointAlpha);
+        //
+        // and `finalImageColor` is the atlas sample, untouched by the point's
+        // own colour. So on a dimmed node the *disc* faded to alpha 0.06 and
+        // the rim stayed at the 1.0 it was drawn with, in full amber or
+        // violet: focus a node and every boundary node in the graph still
+        // announced itself. (The dark glyph rides the same path and is
+        // likewise undimmed, but it is drawn near the background tone, which
+        // is why only the rim was ever visible.)
+        //
+        // The image cannot be faded, so the ringed variant is simply not worn
+        // while the node is dim — the same lever, and the same reasoning, as
+        // `cosmosOutlinedIndices` above.
+        function cosmosGlyphIndexFor(n) {
+            const key = nodeLightingFor(n).dim ? n.group : cosmosImageKey(n);
+            return cosmosImageIndex.get(key) ?? cosmosImageIndex.get(n.group) ?? -1;
+        }
+
+        // Re-read the boundary nodes' glyphs. Returns true when one moved, so
+        // the caller knows the image-index buffer has to reach the GPU — a
+        // `setPointImageIndices` only raises a flag, and the upload behind it
+        // lives in `create()`, which only `render()` gets to (§9f).
+        //
+        // Only boundary nodes can move: every other node wears its type's
+        // glyph in every state. Bounded by how many there are, not by the
+        // graph, so this is affordable on the hover path it shares.
+        function cosmosPaintGlyphs() {
+            if (!cosmosBuf) return false;
+            const { imageIdx } = cosmosBuf;
+            let moved = false;
+            for (const i of cosmosBoundaryIndices()) {
+                const want = cosmosGlyphIndexFor(cosmosNodes[i]);
+                if (imageIdx[i] === want) continue;
+                imageIdx[i] = want;
+                moved = true;
+            }
+            return moved;
+        }
 
         function cosmosApplyHighlight() {
             const focusIdx = state.selectedNode
                 ? cosmosIndexOf.get(state.selectedNode.id)
                 : undefined;
-            const outlined = [];
-            for (let i = 0; i < cosmosNodes.length; i++) {
-                if (cosmosNodes[i].isBoundary) outlined.push(i);
-            }
+            const outlined = cosmosOutlinedIndices();
             const outlinedArg = outlined.length ? outlined : undefined;
 
             // Only when it actually changed.
@@ -24723,8 +25547,16 @@ self.onmessage = async (ev) => {
             // hover, where neither value can have changed.
             //
             // Compared by content, because the array is rebuilt each call and
-            // identity would always differ. It is boundary nodes, so it moves
-            // when a filter or a walk moves it, and not otherwise.
+            // identity would always differ.
+            //
+            // The set moves when the *dimming* moves — entering or leaving
+            // focus, a tour stop, a walk hop, a context pack — and not
+            // otherwise, so a hover, a pan and a plain recolour all still
+            // compare equal and push nothing. That is the price of the ring
+            // following the dimming above: one point-status rewrite per change
+            // of mode, on a path that already repaints the whole canvas. It is
+            // *not* per frame and not per hover; if a walk ever stutters on a
+            // graph with many boundary nodes, this is the line to suspect.
             const sameOutlined = _hlOutlined === undefined
                 ? outlinedArg === undefined
                 : (outlinedArg !== undefined
@@ -25361,6 +26193,7 @@ self.onmessage = async (ev) => {
                 });
 
                 await cosmos.ready;
+                cosmosClampZoom();
                 cosmosInstallCpuPicking();
                 cosmosBuild(view);
                 // Snap the first upload into place. The default 800 ms
@@ -25434,6 +26267,17 @@ self.onmessage = async (ev) => {
                     return;
                 }
                 const scoped = scope && !state.walkActive;
+                // A boundary node's glyph carries its rim, and the rim has to
+                // come and go with the dimming. Both fast paths below write
+                // colour bytes straight into a GPU buffer and never reach
+                // `render()`, which is the only thing that uploads an image
+                // index — so a glyph that moved disqualifies them, exactly as
+                // a too-scattered colour set does.
+                //
+                // In practice it never costs a hover one: dimming is a
+                // function of focus, tour, walk and pack state, none of which
+                // a pointer move touches.
+                const glyphsMoved = cosmosPaintGlyphs();
                 if (scoped) {
                     // The fast path: repaint the scope, push only those slots
                     // to the GPU, and let the frame we are already inside draw
@@ -25441,7 +26285,7 @@ self.onmessage = async (ev) => {
                     // of `update()` → `create()` → `updateColor()` → `ga()`.
                     const touched = cosmosPaintScoped(scope);
                     const pts = cosmos.points, lns = cosmos.lines;
-                    if (pts && lns
+                    if (!glyphsMoved && pts && lns
                         && cosmosWriteColors(pts.targetColorBuffer, cosmosBuf.colors, touched.nodes)
                         && cosmosWriteColors(lns.targetColorBuffer, cosmosBuf.linkColors, touched.links)) {
                         cosmosApplyHighlight();
@@ -25473,7 +26317,7 @@ self.onmessage = async (ev) => {
                 if (!scoped) {
                     visChanged = cosmosApplyVisibility();
                     const pts = cosmos.points, lns = cosmos.lines;
-                    if (!_paintOver && !_paintWidths && !visChanged && pts && lns
+                    if (!glyphsMoved && !_paintOver && !_paintWidths && !visChanged && pts && lns
                         && cosmosWriteColors(pts.targetColorBuffer, cosmosBuf.colors, _paintNodes)
                         && cosmosWriteColors(lns.targetColorBuffer, cosmosBuf.linkColors, _paintLinks)) {
                         cosmosApplyHighlight();
@@ -25504,6 +26348,7 @@ self.onmessage = async (ev) => {
                     cosmos.setLinkColors(cosmosBuf.linkColors);
                 }
                 if (!scoped && _paintWidths) cosmos.setLinkWidths(cosmosBuf.linkWidths);
+                if (glyphsMoved) cosmos.setPointImageIndices(cosmosBuf.imageIdx);
                 cosmosApplyHighlight();
                 // Snap rather than animate: a restyle is a response to a hover
                 // or a filter, and an 800 ms colour tween reads as lag.
@@ -25554,7 +26399,12 @@ self.onmessage = async (ev) => {
                 const idx = cosmosIndicesFor(ids);
                 if (!idx.length) return;
                 cosmosMotion(ms);
-                cosmos.fitViewByPointIndices(idx, ms, 0.2);
+                // A generous margin: this frames a *set the page has just lit
+                // up*, and a fit that ends at the rim of it reads as the graph
+                // having been cropped rather than as the set having been
+                // found. The zoom ceiling above keeps a two-node set from
+                // filling the canvas.
+                cosmos.fitViewByPointIndices(idx, ms, 0.3);
             },
 
             setNodePositions(pos, ms) { cosmosSetNodePositions(pos, ms); },
@@ -25573,7 +26423,7 @@ self.onmessage = async (ev) => {
                 // their layout before the view moves.
                 requestAnimationFrame(() => {
                     cosmosMotion(800);
-                    cosmos.zoomToPointByIndex(i, 800, 4);
+                    cosmos.zoomToPointByIndex(i, 800, COSMOS_FOCUS_ZOOM);
                 });
             },
 
@@ -25656,6 +26506,7 @@ self.onmessage = async (ev) => {
                 _motionHiding = false;
                 _hlFocus = -2;
                 _hlOutlined = undefined;
+                _hlBoundary = null;
                 hitStart = null;
                 hitItems = null;
                 hitCellOf = null;
@@ -29876,7 +30727,16 @@ self.onmessage = async (ev) => {
             // is now a focus to solo.
             syncSoloButton();
             bumpGraphStyles();
-            focusNode(capped[0]);
+            // Frame the whole set, not its first member. Flying to `capped[0]`
+            // put one node of the answer on screen and left the rest of what
+            // had just been lit up outside the canvas, with nothing to say the
+            // highlight continued past the edge.
+            //
+            // In solo mode the set is being re-laid-out as this returns, so its
+            // current positions are not the ones to fit: `setSoloView` clears
+            // `_didFit` and the settle path frames the new arrangement once
+            // there is one.
+            if (!state.soloOnly) frameNodeSet(capped.map(n => n.id));
         }
 
         // ─── Chrome: the empty state and the "what's on screen" chip ───
@@ -34915,6 +35775,1021 @@ self.onmessage = async (ev) => {
             }
             return el;
         }
+// ==== 28-local-llm.js ====
+        // ─── A model running in this browser (wllama) ──────────────────
+        //
+        // The server has no model of its own unless you gave it one. This
+        // panel is the other way in: download a GGUF once, run it here with
+        // llama.cpp-compiled-to-wasm, and hand it to the server as its chat
+        // endpoint (`POST /api/llm/local/attach`). From then on Answer,
+        // Tours and Walks are generated in this tab — same prompts, same
+        // tools, same citations, no API key.
+        //
+        // The server pushes each generation down an SSE stream and we post
+        // the tokens back (`serve/local_llm.rs` has the other half). Two
+        // things follow from that and both are visible in the code below:
+        //
+        //   * This tab is the provider. Closing it stops the model, so the
+        //     stream is reconnected on every `open` and the model re-attached
+        //     — a reconnect the server saw as a disconnect would otherwise
+        //     leave chat pointing at nothing.
+        //   * A browser model is small. `max_tokens` and the retrieval budget
+        //     are clamped server-side from the context window we report here,
+        //     which is why `n_ctx` is part of the attach payload rather than
+        //     a local detail.
+
+        const LLM_PREFS_KEY = 'ug.localLlm.v1';
+
+        // Curated so that every entry actually works in a browser: an
+        // instruction-tuned GGUF with a chat template (tools need one), and
+        // under the 2 GB single-file ceiling wasm imposes — see the note in
+        // the "any GGUF" section of the panel.
+        const LLM_CATALOG = [
+            {
+                id: 'smollm2-135m',
+                name: 'SmolLM2 135M',
+                repo: 'unsloth/SmolLM2-135M-Instruct-GGUF',
+                file: 'SmolLM2-135M-Instruct-Q8_0.gguf',
+                quant: 'Q8_0',
+                bytes: 138 * 1024 * 1024,
+                tools: false,
+                sanity: true,
+                blurb: 'Downloads in seconds and answers instantly — there to prove the plumbing works, not to be useful. Expect confident nonsense.',
+            },
+            {
+                id: 'qwen3-0.6b',
+                name: 'Qwen3 0.6B',
+                repo: 'Qwen/Qwen3-0.6B-GGUF',
+                file: 'Qwen3-0.6B-Q8_0.gguf',
+                quant: 'Q8_0',
+                bytes: 610 * 1024 * 1024,
+                // It has a tool-calling template and cannot use it: given the
+                // toolbox it writes `<search>{...}</search>` into the answer
+                // instead of calling anything. It answers better from ug's own
+                // retrieval, so that is what it gets — overridable under
+                // Advanced.
+                tools: false,
+                blurb: 'Quickest to download and the lightest to run. Narrates tours well. Answers from ug\u2019s retrieval rather than driving the graph tools itself — at this size that is the better trade.',
+            },
+            {
+                id: 'qwen3-1.7b-q4',
+                name: 'Qwen3 1.7B',
+                repo: 'unsloth/Qwen3-1.7B-GGUF',
+                file: 'Qwen3-1.7B-Q4_K_M.gguf',
+                quant: 'Q4_K_M',
+                bytes: 1056 * 1024 * 1024,
+                tools: true,
+                recommended: true,
+                blurb: 'The balance point: follows the graph tools properly and still answers at a readable speed on a laptop.',
+            },
+            {
+                id: 'qwen3-1.7b-q8',
+                name: 'Qwen3 1.7B',
+                repo: 'unsloth/Qwen3-1.7B-GGUF',
+                file: 'Qwen3-1.7B-Q8_0.gguf',
+                quant: 'Q8_0',
+                bytes: 1749 * 1024 * 1024,
+                tools: true,
+                blurb: 'Same model, barely quantized — the best answers that still fit in a browser tab, at roughly half the speed.',
+            },
+        ];
+
+        // Every Qwen3 up to 4B has 28 layers and 8 KV heads of 128, so one
+        // token of context costs the same 112 KiB whatever the size. Worth
+        // showing: at 4096 tokens that is another half a gigabyte of tab, on
+        // top of the weights, and it is the usual reason a load fails.
+        const LLM_KV_BYTES_PER_TOKEN = 112 * 1024;
+
+        const llm = {
+            caps: null,
+            runtime: null,
+            wllama: null,
+            models: null,
+            cached: new Map(),
+            entry: null,
+            clientId: null,
+            events: null,
+            attached: false,
+            busy: false,
+            phase: 'off',
+            detail: '',
+            queue: Promise.resolve(),
+            running: null,
+            cancelled: new Set(),
+            custom: [],
+            prefs: { nCtx: 8192, gpu: true, think: false, auto: true, last: null, tools: {} },
+        };
+
+        function llmSupported() {
+            return !!(llm.caps && llm.caps.supported && llm.caps.runtime);
+        }
+
+        function llmEl(id) {
+            return document.getElementById(id);
+        }
+
+        function llmBytes(n) {
+            if (!n && n !== 0) return '—';
+            if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+            return Math.round(n / 1024 / 1024) + ' MB';
+        }
+
+        function llmModelUrl(entry) {
+            return `https://huggingface.co/${entry.repo}/resolve/main/${entry.file}`;
+        }
+
+        function llmLoadPrefs() {
+            try {
+                const raw = localStorage.getItem(LLM_PREFS_KEY);
+                if (raw) {
+                    const saved = JSON.parse(raw);
+                    Object.assign(llm.prefs, saved.prefs || {});
+                    llm.custom = Array.isArray(saved.custom) ? saved.custom : [];
+                }
+            } catch (_) { /* a browser with storage off still gets the feature */ }
+        }
+
+        function llmSavePrefs() {
+            try {
+                localStorage.setItem(LLM_PREFS_KEY, JSON.stringify({
+                    prefs: llm.prefs,
+                    custom: llm.custom,
+                }));
+            } catch (_) { /* ignore */ }
+        }
+
+        /// Whether this model should be offered ug's graph tools. The catalog
+        /// sets the default — some models have no tool template, others have
+        /// one they cannot use — and the checkbox under Advanced overrides it.
+        function llmToolsWanted(entry) {
+            if (!entry) return false;
+            const saved = llm.prefs.tools && llm.prefs.tools[entry.id];
+            return saved === undefined ? entry.tools !== false : !!saved;
+        }
+
+        function llmEntries() {
+            return LLM_CATALOG.concat(llm.custom);
+        }
+
+        function llmFindEntry(id) {
+            return llmEntries().find(e => e.id === id) || null;
+        }
+
+        // ── the panel ──────────────────────────────────────────────────
+
+        function llmOverlayEl() {
+            return llmEl('llm-overlay');
+        }
+
+        function llmOpen() {
+            llmOverlayEl().classList.add('visible');
+            llmRender();
+            llmRefreshCache();
+        }
+
+        function llmClose() {
+            llmOverlayEl().classList.remove('visible');
+        }
+
+        function llmSetPhase(phase, detail) {
+            llm.phase = phase;
+            llm.detail = detail || '';
+            // A `ug gen` page opened from disk, or the published demo, has no
+            // server to attach to. Offering the button there would be an
+            // invitation to a dead end.
+            const button = llmEl('llm-open-btn');
+            if (button) {
+                button.hidden = phase === 'unsupported';
+                button.classList.toggle('live', llm.attached);
+                button.title = llm.attached
+                    ? `${llm.entry ? llm.entry.name : 'A model'} is running in this browser — click to manage it`
+                    : 'Run a language model in this browser';
+            }
+            llmRenderStatus();
+            llmRenderGuidance();
+            llmApplyInputCaps();
+            llmSyncBadge();
+        }
+
+        function llmProgress(fraction, label) {
+            const wrap = llmEl('llm-progress');
+            if (!wrap) return;
+            if (fraction === null) {
+                wrap.hidden = true;
+                return;
+            }
+            wrap.hidden = false;
+            llmEl('llm-bar-fill').style.width = `${Math.round(fraction * 100)}%`;
+            llmEl('llm-progress-label').textContent = label || '';
+            llmEl('llm-progress-pct').textContent = `${Math.round(fraction * 100)}%`;
+        }
+
+        function llmRenderStatus() {
+            const dot = llmEl('llm-status-dot');
+            const text = llmEl('llm-status-text');
+            const stop = llmEl('llm-stop');
+            const facts = llmEl('llm-facts');
+            if (!dot || !text) return;
+
+            const label = llm.entry ? `${llm.entry.name} · ${llm.entry.quant}` : '';
+            const states = {
+                off: ['', 'No model running here. Pick one below — it downloads once.'],
+                unsupported: ['warn', 'This page can’t run a model — open UltraGraph over http, not as a file.'],
+                downloading: ['busy', `Downloading ${label}…`],
+                loading: ['busy', `Starting ${label}…`],
+                live: ['live', `${label} is answering for this project`],
+                working: ['live', `${label} — generating…`],
+                error: ['error', llm.detail || 'Something went wrong'],
+            };
+            const [kind, fallback] = states[llm.phase] || states.off;
+            dot.className = `llm-dot ${kind}`;
+            text.textContent = llm.phase === 'working' && llm.running
+                ? `${label} — ${llm.running.tokens} tokens · ${llmRate()} tok/s`
+                : (llm.detail && llm.phase !== 'error' ? llm.detail : fallback);
+            stop.hidden = !(llm.attached || llm.busy);
+            stop.textContent = llm.busy && !llm.attached ? 'Cancel' : 'Stop using it';
+
+            if (facts) {
+                if (llm.attached && llm.wllama) {
+                    const gpu = llm.backend === 'webgpu';
+                    facts.hidden = false;
+                    const tools = llm.caps && llm.caps.attached && llm.caps.attached.tools;
+                    facts.innerHTML = [
+                        ['runs on', gpu ? 'the GPU (WebGPU)' : `the CPU · ${llm.threads || '?'} threads`],
+                        ['context window', `${llm.prefs.nCtx} tokens`],
+                        ['graph tools', tools ? `${tools} of them` : 'off — answers use ug\u2019s retrieval'],
+                        ['answered here', llm.served ? `${llm.served} this session` : 'nothing yet'],
+                    ].map(([k, v]) => `<span>${escapeHtml(k)} <b>${escapeHtml(String(v))}</b></span>`).join('');
+                } else {
+                    facts.hidden = true;
+                }
+            }
+        }
+
+        function llmRate() {
+            if (!llm.running || !llm.running.tokens) return '0.0';
+            const secs = (performance.now() - llm.running.started) / 1000;
+            return secs > 0 ? (llm.running.tokens / secs).toFixed(1) : '0.0';
+        }
+
+        function llmRenderEnv() {
+            const host = llmEl('llm-env');
+            if (!host) return;
+            const isolated = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
+            const gpu = 'gpu' in navigator;
+            const opfs = !!(navigator.storage && navigator.storage.getDirectory);
+            const threads = navigator.hardwareConcurrency || 1;
+
+            const chip = (ok, text, title) =>
+                `<span class="llm-chip ${ok ? 'ok' : 'off'}" title="${escapeHtml(title)}">${ok ? '✓' : '✗'} ${escapeHtml(text)}</span>`;
+
+            let html = [
+                chip(gpu, 'WebGPU', gpu
+                    ? 'Layers can be offloaded to the GPU — several times faster.'
+                    : 'No WebGPU here, so the model runs on the CPU.'),
+                chip(isolated, isolated ? `${threads} threads` : 'single thread', isolated
+                    ? 'Cross-origin isolated, so the wasm can use every core.'
+                    : 'Without SharedArrayBuffer the model runs on one core — around nine times slower.'),
+                chip(opfs, 'model storage', opfs
+                    ? 'Downloaded models are kept in this browser’s private storage and reused.'
+                    : 'No OPFS: the model would have to be downloaded again every time.'),
+            ].join('');
+
+            // Counted from the models we can see rather than from
+            // `storage.estimate().usage`, which Chrome updates lazily and
+            // which read 0 MB with a model downloaded and running.
+            const stored = [...llm.cached.values()].reduce((a, b) => a + b, 0);
+            const quota = llm.storage && llm.storage.quota;
+            html += `<span class="llm-chip" title="Models kept in this browser's private storage, and what it will let you keep">`
+                + `${stored ? llmBytes(stored) + ' of models stored' : 'nothing downloaded yet'}`
+                + `${quota ? ' · ' + llmBytes(quota) + ' available' : ''}</span>`;
+            host.innerHTML = html;
+        }
+
+        function llmRenderModels() {
+            const host = llmEl('llm-models');
+            if (!host) return;
+            host.innerHTML = '';
+            for (const entry of llmEntries()) {
+                const url = llmModelUrl(entry);
+                const cachedBytes = llm.cached.get(url);
+                const isCurrent = llm.entry && llm.entry.id === entry.id;
+                const li = document.createElement('li');
+                li.className = 'llm-model' + (isCurrent && llm.attached ? ' active' : '');
+
+                const badges = [];
+                if (entry.recommended) badges.push('<span class="llm-badge rec">recommended</span>');
+                if (entry.sanity) badges.push('<span class="llm-badge">try this first</span>');
+                if (cachedBytes) badges.push(`<span class="llm-badge cached">downloaded</span>`);
+                if (isCurrent && llm.attached) badges.push('<span class="llm-badge live">running</span>');
+                if (entry.custom) badges.push('<span class="llm-badge">yours</span>');
+
+                li.innerHTML = `
+                    <div class="llm-model-head">
+                        <span class="llm-model-name">${escapeHtml(entry.name)}</span>
+                        <span class="llm-model-quant">${escapeHtml(entry.quant || '')}</span>
+                        ${badges.join('')}
+                        <span class="llm-model-size">${cachedBytes ? llmBytes(cachedBytes) : '≈ ' + llmBytes(entry.bytes)}</span>
+                    </div>
+                    <div class="llm-model-blurb">${escapeHtml(entry.blurb || entry.repo + '/' + entry.file)}</div>
+                    <div class="llm-model-actions"></div>`;
+
+                const actions = li.querySelector('.llm-model-actions');
+                const button = (label, cls, fn, disabled) => {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = `settings-btn ${cls}`;
+                    b.textContent = label;
+                    b.disabled = !!disabled;
+                    b.addEventListener('click', fn);
+                    actions.appendChild(b);
+                    return b;
+                };
+
+                if (isCurrent && llm.attached) {
+                    button('Stop using it', 'ghost', () => llmStop());
+                } else {
+                    button(
+                        cachedBytes ? 'Use this model' : `Download & use · ${llmBytes(entry.bytes)}`,
+                        'primary',
+                        () => llmStart(entry),
+                        llm.busy || !llmSupported(),
+                    );
+                }
+                if (cachedBytes && !(isCurrent && llm.attached)) {
+                    button('Delete', 'ghost danger', () => llmDelete(entry), llm.busy);
+                }
+                if (entry.custom) {
+                    button('Remove', 'ghost', () => {
+                        llm.custom = llm.custom.filter(e => e.id !== entry.id);
+                        llmSavePrefs();
+                        llmRenderModels();
+                    }, llm.busy);
+                }
+                host.appendChild(li);
+            }
+        }
+
+        /// The window is the one setting with a consequence people meet the
+        /// hard way: ug's graph toolbox is ~10 000 tokens of JSON schema, so
+        /// below a certain window there is no room for it and answers fall
+        /// back to seeded retrieval. The server publishes that threshold.
+        function llmRenderCtxHint() {
+            const hint = llmEl('llm-ctx-hint');
+            if (!hint) return;
+            const kv = llm.prefs.nCtx * LLM_KV_BYTES_PER_TOKEN;
+            const min = llmToolsMinCtx();
+            const tools = llm.prefs.nCtx >= min
+                ? 'The model can drive the graph tools itself at this size.'
+                : `Below ${min} tokens there is no room for the graph tools, so answers are built from `
+                  + `ug's own retrieval instead — still grounded and cited, just not self-directed.`;
+            hint.textContent =
+                `${tools} Costs about ${llmBytes(kv)} of memory on top of the model itself. `
+                + `Changing it takes effect the next time a model starts.`;
+        }
+
+        /// The retrieval controls in the Ask column, and the budget key each
+        /// one is bounded by.
+        const LLM_CAPPED_INPUTS = [
+            ['chat-k', 'chat_k'],
+            ['sem-k', 'results'],
+            ['chat-hops', 'hops'],
+            ['tour-stops', 'stops'],
+        ];
+
+        /// Hold the retrieval knobs to what the running model's window can
+        /// actually carry.
+        ///
+        /// The server clamps to the same numbers, so this is not what makes
+        /// the answer fit — it is what stops the panel from showing `k=8`
+        /// while the turn quietly uses 3. Originals are remembered on the
+        /// element so stopping the model gives them straight back.
+        function llmApplyInputCaps() {
+            const limits = llm.caps && llm.caps.attached && llm.caps.attached.ui_limits;
+            for (const [id, key] of LLM_CAPPED_INPUTS) {
+                const input = llmEl(id);
+                if (!input) continue;
+                if (input.dataset.llmMax === undefined) {
+                    input.dataset.llmMax = input.max || '';
+                    input.dataset.llmTitle = input.title || '';
+                }
+                const cap = limits && limits[key];
+                if (cap == null) {
+                    input.max = input.dataset.llmMax;
+                    input.title = input.dataset.llmTitle;
+                    input.classList.remove('llm-capped');
+                    continue;
+                }
+                input.max = String(cap);
+                if (Number(input.value) > cap) input.value = String(cap);
+                input.classList.add('llm-capped');
+                input.title = `Capped at ${cap} — that is what fits in the `
+                    + `${llm.prefs.nCtx}-token window of ${llm.entry ? llm.entry.name : 'the local model'}. `
+                    + 'Raise the context window in the model panel for more.';
+            }
+        }
+
+        function llmToolsMinCtx() {
+            return (llm.caps && llm.caps.limits && llm.caps.limits.tools_min_n_ctx) || 8192;
+        }
+
+        /// Annotate the window picker with what each size buys.
+        function llmRenderCtxOptions() {
+            const select = llmEl('llm-ctx');
+            if (!select) return;
+            const min = llmToolsMinCtx();
+            for (const opt of select.options) {
+                const n = Number(opt.value);
+                const gb = llmBytes(n * LLM_KV_BYTES_PER_TOKEN);
+                opt.textContent = `${n} tokens · ${gb} memory · ${n >= min ? 'graph tools on' : 'no graph tools'}`;
+            }
+        }
+
+        /// The panel says different things before and after a model is up:
+        /// what this will cost you, then what to do with it.
+        function llmRenderGuidance() {
+            const steps = llmEl('llm-steps');
+            if (steps) steps.hidden = llm.attached || llm.busy;
+            const next = llmEl('llm-goto-ask');
+            if (next) next.hidden = !llm.attached;
+            const foot = llmEl('llm-foot-status');
+            if (foot) {
+                foot.textContent = llm.attached
+                    ? 'Answer, Tours and Walks are now generated in this tab.'
+                    : 'While a model runs here, Answer, Tours and Walks are generated in this tab.';
+            }
+        }
+
+        function llmRender() {
+            llmRenderStatus();
+            llmRenderGuidance();
+            llmRenderCtxOptions();
+            llmRenderEnv();
+            llmRenderModels();
+            llmRenderCtxHint();
+            const ctx = llmEl('llm-ctx');
+            if (ctx) ctx.value = String(llm.prefs.nCtx);
+            const gpu = llmEl('llm-gpu');
+            if (gpu) gpu.checked = !!llm.prefs.gpu;
+            const think = llmEl('llm-think');
+            if (think) think.checked = !!llm.prefs.think;
+            const auto = llmEl('llm-auto');
+            if (auto) auto.checked = !!llm.prefs.auto;
+            const tools = llmEl('llm-tools');
+            if (tools) {
+                const entry = llm.entry || llmFindEntry(llm.prefs.last);
+                tools.checked = llmToolsWanted(entry);
+                tools.disabled = !entry;
+                const min = llmToolsMinCtx();
+                const hint = llmEl('llm-tools-hint');
+                if (hint) {
+                    hint.textContent = llm.prefs.nCtx < min
+                        ? `Off whatever this says while the window is under ${min} tokens — there is no room for the schemas.`
+                        : 'A model that is bad at tool calling answers better without them: ug retrieves for it instead.';
+                }
+            }
+        }
+
+        /// Keep the two always-visible affordances honest: the dot on the
+        /// sidebar button and the model pill in the Ask column.
+        function llmSyncBadge() {
+            const dot = llmEl('llm-btn-dot');
+            if (dot) {
+                dot.hidden = !(llm.attached || llm.busy);
+                dot.className = 'llm-btn-dot' + (llm.phase === 'working' ? ' working' : llm.busy ? ' busy' : '');
+            }
+            const row = llmEl('chat-model-badge');
+            const pill = llmEl('chat-model-pill');
+            if (row && pill && llm.attached && llm.entry) {
+                row.hidden = false;
+                pill.hidden = false;
+                pill.classList.add('in-browser');
+                pill.textContent = `in this browser · ${llm.entry.name}`;
+                pill.title = 'This project’s answers are generated in this tab. Click to manage.';
+            } else if (pill) {
+                pill.classList.remove('in-browser');
+            }
+        }
+
+        async function llmRefreshCache() {
+            if (!llm.models) return;
+            llm.cached.clear();
+            try {
+                for (const m of await llm.models.getModels()) {
+                    if (m.size > 0) llm.cached.set(m.url, m.size);
+                }
+            } catch (err) {
+                console.warn('local model cache listing failed', err);
+            }
+            try {
+                if (navigator.storage && navigator.storage.estimate) {
+                    llm.storage = await navigator.storage.estimate();
+                }
+            } catch (_) { /* optional */ }
+            llmRenderModels();
+            llmRenderEnv();
+        }
+
+        // ── loading a model ────────────────────────────────────────────
+
+        async function llmRuntime() {
+            if (llm.runtime) return llm.runtime;
+            // Served from the ug binary itself (`/wllama/<version>/…`), so
+            // this works on a machine that cannot reach a CDN.
+            llm.runtime = await import(llm.caps.runtime.js);
+            return llm.runtime;
+        }
+
+        async function llmStart(entry) {
+            if (llm.busy) return;
+            if (!llmSupported()) {
+                llmSetPhase('unsupported');
+                return;
+            }
+            llm.busy = true;
+            llm.entry = entry;
+            llm.served = 0;
+            llmSetPhase('downloading', '');
+            llmRenderModels();
+
+            const started = performance.now();
+            try {
+                const { Wllama, LoggerWithoutDebug } = await llmRuntime();
+                if (llm.wllama) {
+                    await llm.wllama.exit().catch(() => {});
+                    llm.wllama = null;
+                }
+                const wllama = new Wllama(
+                    { default: llm.caps.runtime.wasm },
+                    { parallelDownloads: 3, logger: LoggerWithoutDebug },
+                );
+
+                const useGpu = !!llm.prefs.gpu && 'gpu' in navigator;
+                await wllama.loadModelFromUrl(llmModelUrl(entry), {
+                    n_ctx: llm.prefs.nCtx,
+                    n_gpu_layers: useGpu ? 999 : 0,
+                    // Keep `<think>` in the text we stream so this file can
+                    // fold it away itself; the default parser routes it to a
+                    // field the stream does not carry.
+                    reasoning_format: 'none',
+                    progressCallback: ({ loaded, total }) => {
+                        const secs = (performance.now() - started) / 1000;
+                        const rate = secs > 0 ? loaded / secs : 0;
+                        llmProgress(total ? loaded / total : 0,
+                            `${llmBytes(loaded)} of ${llmBytes(total)} · ${llmBytes(rate)}/s`);
+                    },
+                });
+
+                llmProgress(1, 'Starting the model…');
+                llmSetPhase('loading');
+                llm.wllama = wllama;
+                llm.threads = wllama.getNumThreads ? wllama.getNumThreads() : null;
+                llm.backend = useGpu && wllama.isSupportWebGPU && wllama.isSupportWebGPU() ? 'webgpu' : 'wasm';
+                entry.hasTemplate = !!(wllama.getChatTemplate && wllama.getChatTemplate());
+
+                await llmAttach();
+                llm.prefs.last = entry.id;
+                llmSavePrefs();
+                llmProgress(null);
+                llmSetPhase('live');
+            } catch (err) {
+                console.error('local model failed to start', err);
+                llmProgress(null);
+                llm.entry = null;
+                llmSetPhase('error', llmReadableError(err));
+            } finally {
+                llm.busy = false;
+                llmRenderModels();
+                llmRefreshCache();
+            }
+        }
+
+        function llmReadableError(err) {
+            const msg = String((err && err.message) || err || 'unknown error');
+            if (/out of memory|Cannot allocate|OOM/i.test(msg)) {
+                return 'This browser ran out of memory. Try a smaller model, or a smaller context window under Advanced.';
+            }
+            if (/fetch|network|Failed to load/i.test(msg)) {
+                return 'The download failed — check the connection, then try again. Partial downloads are resumed.';
+            }
+            if (/context size|exceeds the available context|kv_cache_full|n_ctx/i.test(msg)) {
+                return `That prompt did not fit this model's ${llm.prefs.nCtx}-token window. `
+                    + 'Raise the context window under Advanced in the model panel (bigger window, more memory), '
+                    + 'or ask a narrower question.';
+            }
+            return msg;
+        }
+
+        async function llmStop() {
+            if (llm.running) llm.running.ctrl.abort();
+            try {
+                await fetch('/api/llm/local/detach', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ client_id: llm.clientId }),
+                });
+            } catch (_) { /* the server drops it when the stream goes anyway */ }
+            llm.attached = false;
+            if (llm.wllama) {
+                await llm.wllama.exit().catch(() => {});
+                llm.wllama = null;
+            }
+            llm.entry = null;
+            llm.prefs.last = null;
+            llmSavePrefs();
+            llmSetPhase('off');
+            llmRenderModels();
+            if (typeof probeCapabilities === 'function') probeCapabilities(true);
+        }
+
+        async function llmDelete(entry) {
+            if (!llm.models) return;
+            const url = llmModelUrl(entry);
+            try {
+                for (const m of await llm.models.getModels()) {
+                    if (m.url === url) await m.remove();
+                }
+            } catch (err) {
+                console.warn('could not delete model', err);
+            }
+            llmRefreshCache();
+        }
+
+        async function llmAttach() {
+            const res = await fetch('/api/llm/local/attach', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    client_id: llm.clientId,
+                    model: llm.entry.id,
+                    label: `${llm.entry.name} ${llm.entry.quant || ''}`.trim(),
+                    n_ctx: llm.prefs.nCtx,
+                    supports_tools: llmToolsWanted(llm.entry) && llm.entry.hasTemplate !== false,
+                    backend: llm.backend,
+                }),
+            });
+            if (!res.ok) throw new Error(`the server refused the model (HTTP ${res.status})`);
+            // The reply is the status payload, including the budget this
+            // window bought — the panel and the retrieval controls both read
+            // their numbers from it rather than guessing.
+            llm.caps = await res.json().catch(() => llm.caps);
+            llm.attached = true;
+            // Banners, the model pill and the greyed-out modes all key off
+            // capabilities, and chat only just became possible.
+            if (typeof probeCapabilities === 'function') probeCapabilities(true);
+        }
+
+        // ── answering what the server asks ─────────────────────────────
+
+        function llmConnect() {
+            if (llm.events) llm.events.close();
+            const src = new EventSource(`/api/llm/local/events?client=${encodeURIComponent(llm.clientId)}`);
+            llm.events = src;
+
+            src.addEventListener('open', () => {
+                // A reconnect looks like a fresh tab to the server, which
+                // detached the model when the old stream dropped. Put it back.
+                if (llm.wllama && !llm.attached) {
+                    llmAttach().then(() => llmSetPhase('live')).catch(err => console.warn('re-attach failed', err));
+                }
+            });
+            src.addEventListener('job', (e) => {
+                let job;
+                try {
+                    job = JSON.parse(e.data);
+                } catch (err) {
+                    return;
+                }
+                llm.queue = llm.queue.then(() => llmRunJob(job)).catch(err => console.warn('job failed', err));
+            });
+            src.addEventListener('cancel', (e) => {
+                try {
+                    const { id } = JSON.parse(e.data);
+                    llm.cancelled.add(id);
+                    if (llm.running && llm.running.id === id) llm.running.ctrl.abort();
+                } catch (_) { /* ignore */ }
+            });
+            src.addEventListener('error', () => {
+                // EventSource reconnects on its own; the model is only
+                // considered attached again once `open` says so.
+                llm.attached = false;
+                if (llm.wllama) llmSetPhase('loading', 'Reconnecting to the server…');
+            });
+        }
+
+        /// Messages arrive in OpenAI shape. wllama wants `content` to be a
+        /// string (except on an assistant turn that is only tool calls), and
+        /// anything else it does not recognise is dropped rather than risked.
+        function llmMessages(raw) {
+            return (raw || []).map(m => {
+                const out = { role: m.role };
+                if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+                    out.tool_calls = m.tool_calls;
+                    out.content = m.content || '';
+                } else {
+                    out.content = typeof m.content === 'string' ? m.content : (m.content ? String(m.content) : '');
+                }
+                if (m.role === 'tool' && m.tool_call_id) out.tool_call_id = m.tool_call_id;
+                return out;
+            });
+        }
+
+        /// Strip `<think>…</think>` from a stream, incrementally.
+        ///
+        /// The model emits it inline (we load with `reasoning_format: 'none'`
+        /// on purpose) and the server would otherwise show it as the answer.
+        /// Returns the visible part of this piece.
+        function llmThinkFilter() {
+            let inside = false;
+            let carry = '';
+            return (piece) => {
+                let text = carry + piece;
+                carry = '';
+                let out = '';
+                while (text) {
+                    if (inside) {
+                        const end = text.indexOf('</think>');
+                        if (end === -1) {
+                            // Keep a tail that might be a split closing tag.
+                            carry = text.slice(-8);
+                            return out;
+                        }
+                        text = text.slice(end + 8);
+                        inside = false;
+                        continue;
+                    }
+                    const start = text.indexOf('<think>');
+                    if (start === -1) {
+                        const tail = text.slice(-7);
+                        if (/<t?h?i?n?k?$/.test(tail)) {
+                            carry = tail;
+                            out += text.slice(0, text.length - tail.length);
+                        } else {
+                            out += text;
+                        }
+                        return out;
+                    }
+                    out += text.slice(0, start);
+                    text = text.slice(start + 7);
+                    inside = true;
+                }
+                return out;
+            };
+        }
+
+        async function llmRunJob(job) {
+            if (llm.cancelled.has(job.id)) {
+                llm.cancelled.delete(job.id);
+                return;
+            }
+            if (!llm.wllama) {
+                await llmPost(`/api/llm/local/jobs/${job.id}/result`, {
+                    error: 'the browser model was stopped before this request ran',
+                });
+                return;
+            }
+
+            const req = job.request || {};
+            const wantsTools = Array.isArray(req.tools) && req.tools.length > 0;
+            const ctrl = new AbortController();
+            llm.running = { id: job.id, ctrl, tokens: 0, started: performance.now() };
+            llmSetPhase('working');
+
+            const params = {
+                messages: llmMessages(req.messages),
+                max_tokens: req.max_tokens || 512,
+                temp: typeof req.temperature === 'number' ? req.temperature : 0.3,
+                abortSignal: ctrl.signal,
+                chat_template_kwargs: { enable_thinking: !!llm.prefs.think },
+            };
+
+            let content = '';
+            let toolCalls = [];
+            let finish = 'stop';
+            let usage = null;
+
+            try {
+                if (wantsTools) {
+                    // One shot, not streamed: tool calls arrive whole, and a
+                    // half-assembled function argument is not something to
+                    // reconstruct from deltas.
+                    params.tools = req.tools;
+                    if (req.tool_choice) params.tool_choice = req.tool_choice;
+                    const res = await llm.wllama.createChatCompletion(params);
+                    const choice = (res.choices || [])[0] || {};
+                    content = (choice.message && choice.message.content) || '';
+                    toolCalls = (choice.message && choice.message.tool_calls) || [];
+                    finish = choice.finish_reason || 'stop';
+                    usage = res.usage || null;
+                    const visible = llmThinkFilter()(content);
+                    if (visible) await llmPost(`/api/llm/local/jobs/${job.id}/delta`, { content: visible });
+                    content = visible;
+                } else {
+                    const stream = await llm.wllama.createChatCompletion({ ...params, stream: true });
+                    const strip = llmThinkFilter();
+                    let pending = '';
+                    let lastFlush = performance.now();
+                    for await (const chunk of stream) {
+                        const choice = (chunk.choices || [])[0] || {};
+                        const piece = choice.delta && choice.delta.content;
+                        if (chunk.usage) usage = chunk.usage;
+                        if (choice.finish_reason) finish = choice.finish_reason;
+                        if (!piece) continue;
+                        llm.running.tokens++;
+                        const visible = strip(piece);
+                        if (!visible) continue;
+                        content += visible;
+                        pending += visible;
+                        // Batched: a POST per token would spend more time in
+                        // HTTP than in inference.
+                        if (performance.now() - lastFlush > 120) {
+                            await llmPost(`/api/llm/local/jobs/${job.id}/delta`, { content: pending });
+                            pending = '';
+                            lastFlush = performance.now();
+                            llmRenderStatus();
+                        }
+                    }
+                    if (pending) await llmPost(`/api/llm/local/jobs/${job.id}/delta`, { content: pending });
+                }
+
+                await llmPost(`/api/llm/local/jobs/${job.id}/result`, {
+                    content,
+                    tool_calls: toolCalls,
+                    finish_reason: finish,
+                    usage,
+                });
+                llm.served = (llm.served || 0) + 1;
+            } catch (err) {
+                const aborted = ctrl.signal.aborted || /abort/i.test(String(err && err.message));
+                await llmPost(`/api/llm/local/jobs/${job.id}/result`, {
+                    error: aborted ? 'the answer was cancelled' : llmReadableError(err),
+                });
+                if (!aborted) console.error('local generation failed', err);
+            } finally {
+                llm.cancelled.delete(job.id);
+                llm.running = null;
+                llmSetPhase(llm.attached ? 'live' : 'off');
+            }
+        }
+
+        function llmPost(url, body) {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            }).catch(err => console.warn('posting to the server failed', err));
+        }
+
+        // ── capabilities + boot ────────────────────────────────────────
+
+        /// Called from `probeCapabilities` whenever the server's answer
+        /// lands, including the re-probe that follows an attach.
+        function llmOnCapabilities(caps) {
+            llm.caps = (caps && caps.local_llm) || null;
+            const serverSide = caps && caps.chat && caps.chat.in_browser;
+            // Another tab is serving. Say so rather than offering a second
+            // model that would silently take over the first one's job.
+            if (serverSide && !llm.attached && !llm.busy) {
+                llmSetPhase('live', `${(caps.chat.label || 'A model')} is running in another tab`);
+                llm.foreign = true;
+            } else if (!serverSide && llm.foreign) {
+                llm.foreign = false;
+                llmSetPhase('off');
+            }
+            if (!llmSupported() && !llm.busy) llmSetPhase('unsupported');
+            if (llmOverlayEl() && llmOverlayEl().classList.contains('visible')) llmRender();
+            llmApplyInputCaps();
+            llmSyncBadge();
+            llmMaybeAutoStart();
+        }
+
+        let llmAutoStarted = false;
+        function llmMaybeAutoStart() {
+            if (llmAutoStarted || !llm.prefs.auto || !llm.prefs.last) return;
+            if (!llmSupported() || llm.busy || llm.attached || llm.foreign) return;
+            const entry = llmFindEntry(llm.prefs.last);
+            if (!entry) return;
+            llmAutoStarted = true;
+            // Only when the weights are already here: a page load must never
+            // start a gigabyte-sized download on its own.
+            llmRefreshCache().then(() => {
+                if (llm.cached.has(llmModelUrl(entry))) llmStart(entry);
+            });
+        }
+
+        function llmAddCustom() {
+            const repo = llmEl('llm-custom-repo').value.trim().replace(/^https?:\/\/huggingface\.co\//, '').replace(/\/+$/, '');
+            const file = llmEl('llm-custom-file').value.trim();
+            if (!repo || !file) return;
+            if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !file.endsWith('.gguf')) {
+                llmSetPhase('error', 'That does not look like a Hugging Face repo and a .gguf file.');
+                return;
+            }
+            const entry = {
+                id: `hf:${repo}/${file}`,
+                name: repo.split('/').pop().replace(/-GGUF$/i, ''),
+                repo,
+                file,
+                quant: (file.match(/(IQ\d\w*|Q\d[_\w]*|BF16|F16)/i) || [''])[0],
+                bytes: 0,
+                tools: true,
+                custom: true,
+                blurb: `${repo} · ${file}`,
+            };
+            if (!llmFindEntry(entry.id)) {
+                llm.custom.push(entry);
+                llmSavePrefs();
+            }
+            llmEl('llm-custom-repo').value = '';
+            llmEl('llm-custom-file').value = '';
+            llmRenderModels();
+        }
+
+        (function initLocalLlm() {
+            llmLoadPrefs();
+            llm.clientId = `tab-${Math.random().toString(36).slice(2, 10)}`;
+
+            const overlay = llmOverlayEl();
+            if (!overlay) return;
+
+            llmEl('llm-open-btn').addEventListener('click', llmOpen);
+            llmEl('llm-close').addEventListener('click', llmClose);
+            document.querySelectorAll('[data-open-llm]').forEach(b => b.addEventListener('click', llmOpen));
+            const pill = llmEl('chat-model-pill');
+            if (pill) pill.addEventListener('click', () => { if (llm.attached || llmSupported()) llmOpen(); });
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) llmClose(); });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && overlay.classList.contains('visible')) llmClose();
+            });
+
+            llmEl('llm-stop').addEventListener('click', () => {
+                if (llm.busy && llm.running) llm.running.ctrl.abort();
+                llmStop();
+            });
+            llmEl('llm-custom-add').addEventListener('click', llmAddCustom);
+            llmEl('llm-goto-ask').addEventListener('click', () => {
+                llmClose();
+                const input = document.getElementById('ask-input');
+                if (input) input.focus();
+            });
+            llmEl('llm-ctx').addEventListener('change', (e) => {
+                llm.prefs.nCtx = Number(e.target.value) || 4096;
+                llmSavePrefs();
+                llmRenderCtxHint();
+            });
+            llmEl('llm-tools').addEventListener('change', async (e) => {
+                const entry = llm.entry || llmFindEntry(llm.prefs.last);
+                if (!entry) return;
+                llm.prefs.tools = llm.prefs.tools || {};
+                llm.prefs.tools[entry.id] = e.target.checked;
+                llmSavePrefs();
+                // Attaching again is cheap and takes effect on the next
+                // question — no reload, no re-download.
+                if (llm.attached) {
+                    await llmAttach().catch(err => console.warn('re-attach failed', err));
+                    llmRender();
+                }
+            });
+            for (const [id, key] of [['llm-gpu', 'gpu'], ['llm-think', 'think'], ['llm-auto', 'auto']]) {
+                llmEl(id).addEventListener('change', (e) => {
+                    llm.prefs[key] = e.target.checked;
+                    llmSavePrefs();
+                });
+            }
+
+            // Closing the tab drops the SSE stream, which is what the server
+            // watches — but a beacon makes the handover immediate rather than
+            // waiting on a keepalive to fail.
+            window.addEventListener('pagehide', () => {
+                if (!llm.attached) return;
+                try {
+                    navigator.sendBeacon(
+                        '/api/llm/local/detach',
+                        new Blob([JSON.stringify({ client_id: llm.clientId })], { type: 'application/json' }),
+                    );
+                } catch (_) { /* the stream drop covers it */ }
+            });
+
+            // The model list needs the runtime's cache manager, which is only
+            // worth importing where the server says the feature exists. The
+            // capabilities probe calls back into `llmOnCapabilities`.
+            fetch('/api/llm/local/status')
+                .then(r => (r.ok ? r.json() : null))
+                .then(async (status) => {
+                    if (!status || !status.supported) {
+                        llmSetPhase('unsupported');
+                        return;
+                    }
+                    llm.caps = status;
+                    const { ModelManager } = await llmRuntime();
+                    llm.models = new ModelManager();
+                    llmConnect();
+                    await llmRefreshCache();
+                    llmSetPhase('off');
+                    llmMaybeAutoStart();
+                })
+                .catch(() => llmSetPhase('unsupported'));
+        })();
     </script>
 </body>
 

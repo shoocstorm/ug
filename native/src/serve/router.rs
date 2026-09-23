@@ -1,11 +1,13 @@
 //! `router.rs` — split out of `serve.rs`; see `docs/dev/REFACTOR-TRACKING.md`.
 
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
+use std::sync::OnceLock;
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -18,6 +20,7 @@ use super::db_api::*;
 use super::encoding::asset_response;
 use super::git_api::*;
 use super::host_guard::guard_host;
+use super::local_llm::*;
 use super::projects_api::*;
 use super::*;
 
@@ -42,6 +45,10 @@ pub(crate) fn build_router(state: ServeState) -> Router {
         .route("/threejs-vis.bundle.js", get(handle_bundle))
         .route("/cosmos-vis.bundle.js", get(handle_cosmos_bundle))
         .route("/favicon.svg", get(handle_favicon))
+        // The in-browser inference runtime, vendored in `native/vendor/wllama`
+        // and served under its version so an 8 MB wasm can be cached hard.
+        .route("/wllama/:version/wllama.js", get(handle_wllama_js))
+        .route("/wllama/:version/wllama.wasm", get(handle_wllama_wasm))
         .route("/graph.json", get(handle_graph))
         .route("/indexed-tree.json", get(handle_indexed_tree))
         .route("/healthz", get(handle_health))
@@ -89,9 +96,30 @@ pub(crate) fn build_router(state: ServeState) -> Router {
         .route("/api/git/diff", get(api_git_diff))
         .route("/api/walk", post(api_walk))
         .route("/api/chat/config", get(api_chat_config))
+        // ---- The browser tab as a model provider (serve/local_llm.rs) ----
+        .route("/api/llm/local/status", get(api_local_llm_status))
+        .route("/api/llm/local/attach", post(api_local_llm_attach))
+        .route("/api/llm/local/detach", post(api_local_llm_detach))
+        .route("/api/llm/local/events", get(api_local_llm_events))
+        .route("/api/llm/local/jobs/:id/delta", post(api_local_llm_delta))
+        .route("/api/llm/local/jobs/:id/result", post(api_local_llm_result))
+        // The OpenAI-compatible face of it, which is what `ChatClient` calls.
+        .route(
+            "/api/llm/local/v1/chat/completions",
+            post(api_local_llm_completions),
+        )
         // CompressionLayer skips responses that already have Content-Encoding,
         // so it only kicks in for the dynamic /api/* JSON.
-        .layer(CompressionLayer::new().br(true))
+        //
+        // `application/wasm` is excluded by hand: the 8 MB wllama binary would
+        // otherwise be brotli-compressed on *every* request — seconds of CPU
+        // each time, to speed up a transfer that is almost always loopback and
+        // that the browser then caches for a year anyway.
+        .layer(
+            CompressionLayer::new().br(true).compress_when(
+                DefaultPredicate::new().and(NotForContentType::const_new("application/wasm")),
+            ),
+        )
         // Reject oversized request bodies before they reach a handler —
         // every legitimate payload is KB-scale, so 4 MiB is pure abuse
         // protection and never bites the app.
@@ -120,8 +148,72 @@ pub(crate) fn build_router(state: ServeState) -> Router {
 
 // ---------- Static handlers ----------
 
+/// The app page, cross-origin isolated.
+///
+/// The two COOP/COEP headers are what make `SharedArrayBuffer` available,
+/// and `SharedArrayBuffer` is what lets the in-browser model run on more
+/// than one thread — the difference between a usable local model and a
+/// nine-times-slower one. They are set unconditionally rather than behind
+/// the feature, because a page that is isolated only sometimes is a page
+/// whose threading depends on which route you loaded it from.
+///
+/// This is safe here precisely because the page has no external URLs: every
+/// script, style and asset it pulls is same-origin, and same-origin
+/// subresources are exempt from `require-corp`.
 async fn handle_index(State(state): State<ServeState>, headers: HeaderMap) -> Response {
-    asset_response(&state.html, &headers)
+    let mut resp = asset_response(&state.html, &headers);
+    let h = resp.headers_mut();
+    h.insert(
+        "cross-origin-opener-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    h.insert(
+        "cross-origin-embedder-policy",
+        HeaderValue::from_static("require-corp"),
+    );
+    resp
+}
+
+/// The wllama ES module and its wasm.
+///
+/// Both are immutable for a year: the URL carries the vendored version
+/// (`/wllama/3.6.1/…`), so the only way to get different bytes is to ask for
+/// a different URL. Without that the 8 MB wasm is re-fetched on every page
+/// load, which is most of a second on loopback and much worse over a LAN.
+async fn handle_wllama_js(headers: HeaderMap) -> Response {
+    static JS: OnceLock<EncodedAsset> = OnceLock::new();
+    let asset = JS.get_or_init(|| {
+        EncodedAsset::new(
+            crate::assets::WLLAMA_JS.to_vec(),
+            "text/javascript; charset=utf-8",
+        )
+    });
+    immutable(asset_response(asset, &headers))
+}
+
+async fn handle_wllama_wasm() -> Response {
+    // Deliberately *not* through `EncodedAsset`: brotli-9 over 8 MB costs
+    // seconds of CPU on the first request to save bytes on a transfer that is
+    // almost always loopback, and the browser caches the result either way.
+    immutable(
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, "application/wasm")
+            .header(
+                axum::http::header::CONTENT_LENGTH,
+                crate::assets::WLLAMA_WASM.len(),
+            )
+            .body(axum::body::Body::from(crate::assets::WLLAMA_WASM))
+            .expect("build response"),
+    )
+}
+
+fn immutable(mut resp: Response) -> Response {
+    resp.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    resp
 }
 
 async fn handle_graph(State(state): State<ServeState>, headers: HeaderMap) -> Response {

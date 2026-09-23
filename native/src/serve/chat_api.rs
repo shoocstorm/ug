@@ -201,7 +201,10 @@ pub(crate) async fn api_config_post(
         }
         None => tracing::info!("chat config cleared via /api/config (/api/chat will return 503)"),
     }
-    *state.chat_default.write().expect("chat_default poisoned") = new_default;
+    // A save must not evict a browser tab that is currently serving the
+    // model: the rebuilt config becomes what detaching restores, and the
+    // bridge stays in force until the user turns it off.
+    super::local_llm::reapply_after_config_rebuild(&state, new_default);
 
     ok_json(config_payload(&state).to_string())
 }
@@ -341,8 +344,20 @@ pub(crate) async fn api_chat(
         return api_chat_stream(state, body, db, embedder, chat_client);
     }
 
-    let k = body.k.unwrap_or(8).min(50).max(1);
-    let hops = body.hops.unwrap_or(2).min(4);
+    let plan = state.local_llm.plan_prompt(body.tools.unwrap_or(true));
+    // The same ceilings the model panel puts on its inputs. A tab that has
+    // not seen them yet — or a curl — must not be able to ask for a pack
+    // that cannot fit, so they are applied here as well as there.
+    let k = body
+        .k
+        .unwrap_or(8)
+        .clamp(1, 50)
+        .min(plan.ui.map_or(usize::MAX, |u| u.chat_k));
+    let hops = body
+        .hops
+        .unwrap_or(2)
+        .min(4)
+        .min(plan.ui.map_or(u32::MAX, |u| u.hops));
     let strategy = body
         .strategy
         .as_deref()
@@ -354,10 +369,15 @@ pub(crate) async fn api_chat(
         .map(Direction::from_str_lossy)
         .unwrap_or(Direction::Both);
     let include_snippets = body.include_snippets.unwrap_or(true);
+    // A model running in the browser has a window measured in thousands of
+    // tokens, not hundreds of thousands, and the turn has to fit in it whole:
+    // system prompt, tool schemas, question, tool output and answer. `plan`
+    // did that arithmetic once, above; everything here just obeys it.
     let max_context_chars = body
         .max_context_chars
         .unwrap_or(DEFAULT_CONTEXT_CHARS)
-        .min(64_000);
+        .min(64_000)
+        .min(plan.context_chars.unwrap_or(usize::MAX));
     let edge_types_owned: Option<Vec<String>> = body.edge_types.filter(|v| !v.is_empty());
     let history_owned: Vec<ChatMessage> = body.history.unwrap_or_default();
 
@@ -377,7 +397,10 @@ pub(crate) async fn api_chat(
     opts.where_clause = body.where_clause.as_deref();
     opts.system_prompt = body.system_prompt.as_deref();
     opts.fast = !body.think.unwrap_or(false);
-    opts.seed = body.seed.unwrap_or(!body.tools.unwrap_or(true));
+    // No toolbox means no self-directed retrieval, so the seed pack has to
+    // come back on — otherwise the model answers from nothing at all.
+    let tools_on = plan.schemas.is_some();
+    opts.seed = body.seed.unwrap_or(!tools_on);
 
     let dest_name = db.backend_name();
     let repo_root = state.repo_root();
@@ -402,14 +425,18 @@ pub(crate) async fn api_chat(
         Box::pin(async move { run_chat_tool(state, db, embedder, name, args, ledger).await })
             as futures::future::BoxFuture<'static, Result<String, String>>
     };
-    let toolbox = body.tools.unwrap_or(true).then(|| chat::ToolBox {
-        schemas: crate::mcp::tools::openai_tool_schemas(),
+    let toolbox = plan.schemas.clone().map(|schemas| chat::ToolBox {
+        schemas,
         run: &runner,
         max_rounds: body
-                    .max_tool_rounds
-                    .unwrap_or(chat::DEFAULT_TOOL_ROUNDS)
-                    .min(chat::MAX_TOOL_ROUNDS),
-        max_result_chars: chat::DEFAULT_TOOL_RESULT_CHARS,
+            .max_tool_rounds
+            .unwrap_or(chat::DEFAULT_TOOL_ROUNDS)
+            .min(chat::MAX_TOOL_ROUNDS)
+            .min(plan.tool_rounds.unwrap_or(usize::MAX)),
+        // Every round's result stays in the window until the turn ends, so
+        // the 60 kB default is five times a browser model's whole context.
+        max_result_chars: chat::DEFAULT_TOOL_RESULT_CHARS
+            .min(plan.tool_result_chars.unwrap_or(usize::MAX)),
     });
 
     let outcome = chat::run_chat_rag(chat::ChatRagRequest {
@@ -481,6 +508,8 @@ pub(crate) fn api_chat_stream(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SseEvent>();
     let repo_root = state.repo_root();
     let embed_lock = state.embed_lock.clone();
+    // One budget for the whole turn — see the non-streaming path.
+    let plan = state.local_llm.plan_prompt(body.tools.unwrap_or(true));
 
     tokio::spawn(async move {
         let dest_name = db.backend_name();
@@ -501,8 +530,17 @@ pub(crate) fn api_chat_stream(
             }
         };
 
-        let k = body.k.unwrap_or(8).min(50).max(1);
-        let hops = body.hops.unwrap_or(2).min(4);
+        // Same ceilings as the non-streaming path.
+        let k = body
+            .k
+            .unwrap_or(8)
+            .clamp(1, 50)
+            .min(plan.ui.map_or(usize::MAX, |u| u.chat_k));
+        let hops = body
+            .hops
+            .unwrap_or(2)
+            .min(4)
+            .min(plan.ui.map_or(u32::MAX, |u| u.hops));
         let strategy = body
             .strategy
             .as_deref()
@@ -514,10 +552,12 @@ pub(crate) fn api_chat_stream(
             .map(Direction::from_str_lossy)
             .unwrap_or(Direction::Both);
         let include_snippets = body.include_snippets.unwrap_or(true);
+        // Same browser-window clamp as the non-streaming path above.
         let max_context_chars = body
             .max_context_chars
             .unwrap_or(DEFAULT_CONTEXT_CHARS)
-            .min(64_000);
+            .min(64_000)
+            .min(plan.context_chars.unwrap_or(usize::MAX));
         let edge_types_owned: Option<Vec<String>> = body.edge_types.filter(|v| !v.is_empty());
         let history_owned: Vec<ChatMessage> = body.history.unwrap_or_default();
 
@@ -533,7 +573,8 @@ pub(crate) fn api_chat_stream(
         opts.system_prompt = body.system_prompt.as_deref();
         opts.fast = !body.think.unwrap_or(false);
         // The toolbox decides: with tools the model does its own retrieval.
-        opts.seed = body.seed.unwrap_or(!body.tools.unwrap_or(true));
+        let tools_on = plan.schemas.is_some();
+        opts.seed = body.seed.unwrap_or(!tools_on);
 
         emit("phase", serde_json::json!({ "phase": "retrieving" }));
 
@@ -556,15 +597,17 @@ pub(crate) fn api_chat_stream(
             Box::pin(async move { run_chat_tool(state, db, embedder, name, args, ledger).await })
                 as futures::future::BoxFuture<'static, Result<String, String>>
         };
-        let toolbox = if body.tools.unwrap_or(true) {
+        let toolbox = if let Some(schemas) = plan.schemas.clone() {
             Some(chat::ToolBox {
-                schemas: crate::mcp::tools::openai_tool_schemas(),
+                schemas,
                 run: &runner,
                 max_rounds: body
                     .max_tool_rounds
                     .unwrap_or(chat::DEFAULT_TOOL_ROUNDS)
-                    .min(chat::MAX_TOOL_ROUNDS),
-                max_result_chars: chat::DEFAULT_TOOL_RESULT_CHARS,
+                    .min(chat::MAX_TOOL_ROUNDS)
+                    .min(plan.tool_rounds.unwrap_or(usize::MAX)),
+                max_result_chars: chat::DEFAULT_TOOL_RESULT_CHARS
+                    .min(plan.tool_result_chars.unwrap_or(usize::MAX)),
             })
         } else {
             None
@@ -1167,6 +1210,9 @@ pub(crate) fn api_tour_stream(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SseEvent>();
     let repo_root = state.repo_root();
     let embed_lock = state.embed_lock.clone();
+    // Computed before the spawn: the plan is what the tour's budgets are
+    // clamped to, and `state` is moved into the task below.
+    let tour_plan = state.local_llm.plan_prompt(false);
 
     tokio::spawn(async move {
         let dest_name = db.backend_name();
@@ -1187,7 +1233,8 @@ pub(crate) fn api_tour_stream(
 
         let edge_types_owned: Option<Vec<String>> =
             body.edge_types.clone().filter(|v| !v.is_empty());
-        let opts = tour_opts_from_body(&body, edge_types_owned.as_deref());
+        let mut opts = tour_opts_from_body(&body, edge_types_owned.as_deref());
+        super::local_llm::clamp_tour_opts(&tour_plan, &mut opts);
 
         // A tour narrates its own stops rather than citing [#N], so its
         // ledger is write-only — it exists because `search` numbers through
@@ -1370,7 +1417,11 @@ pub(crate) async fn api_tour(
     let repo_root = state.repo_root();
     let dest_name = db.backend_name();
 
-    let opts = tour_opts_from_body(&body, edge_types_owned.as_deref());
+    let mut opts = tour_opts_from_body(&body, edge_types_owned.as_deref());
+    // Tours plan in one long prompt and narrate in one long answer; the
+    // toolbox is off unless the caller asked to research, so the budget is
+    // the toolless one.
+    super::local_llm::clamp_tour_opts(&state.local_llm.plan_prompt(false), &mut opts);
 
     let mut used_model: Option<String> = None;
     let result = match chat_cfg {

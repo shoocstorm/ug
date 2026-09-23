@@ -353,6 +353,106 @@ Sample output:
 
 ---
 
+## Phase 5 — a model in the browser  ✅ shipped
+
+`ug serve` answers questions with whatever OpenAI-compatible endpoint you
+configured. Phase 5 adds the case where you configured nothing: the page
+downloads a GGUF, runs it with [wllama](https://github.com/ngxson/wllama)
+(llama.cpp as WebAssembly) and offers *itself* to the server as that
+endpoint.
+
+```
+  run_chat_rag / plan_tour / walk
+          │
+          ▼
+     ChatClient ──HTTP──► POST /api/llm/local/v1/chat/completions
+                                     │  job (SSE)            ▲
+                                     ▼                       │ deltas + result
+                          GET /api/llm/local/events ──► the tab (wllama)
+```
+
+Nothing above `ChatClient` knows the difference, which is the point: the
+prompts, the tool loop, the citation ledger and the tour planner are the
+same code whether the tokens come from a hosted API or from the tab.
+
+### Routes
+
+| Route | Who calls it | What it does |
+|---|---|---|
+| `GET /api/llm/local/status` | the page | Feature state + where to fetch the runtime |
+| `POST /api/llm/local/attach` | the page | "I have a model loaded" — installs the bridge as `chat_default` |
+| `POST /api/llm/local/detach` | the page | Puts the previous chat config back |
+| `GET /api/llm/local/events` | the page | SSE: jobs to run, cancellations — **and the liveness signal** |
+| `POST /api/llm/local/jobs/:id/delta` | the page | Tokens as they are produced |
+| `POST /api/llm/local/jobs/:id/result` | the page | The finished turn, or an error |
+| `POST /api/llm/local/v1/chat/completions` | `ChatClient` | Ordinary OpenAI chat completions, streaming or not |
+
+`GET /wllama/<version>/wllama.js` and `…/wllama.wasm` serve the runtime from
+the binary (vendored in `native/vendor/wllama/`, ~8.5 MB). The version is in
+the path because both are served `immutable` for a year — see
+`native/vendor/wllama/README.md` for the upgrade steps.
+
+### Checking it
+
+`cargo nextest run -E 'test(local_llm)'` covers the hub and the routes.
+Neither can cover the browser half, so `scripts/local-llm-e2e.mjs` does: it
+starts `ug serve`, drives the real page in headless Chrome over CDP, clicks
+through to download and run Qwen3 0.6B, and then asks `/api/chat` and
+`/api/tour` for answers. With `KEEP_PROFILE=<dir>` the weights stay cached
+between runs and the whole thing takes under a minute.
+
+### Six things that are not obvious
+
+**The page must be cross-origin isolated.** `handle_index` sets
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` on the app page,
+unconditionally. Without them `SharedArrayBuffer` is undefined and wllama
+silently runs single-threaded — about nine times slower, with nothing in the
+UI to explain it. This is safe because the page has no external URLs at all:
+every subresource is same-origin, and same-origin subresources are exempt
+from `require-corp`.
+
+**The tab is the provider, so losing the tab is losing the provider.** The
+SSE stream is the liveness check. When it drops, the attachment is torn down
+and in-flight jobs fail immediately with a message naming the cause, instead
+of every caller waiting out its own 15-minute timeout against a tab that
+closed. The page re-attaches on every `open`, because an `EventSource`
+reconnect looks exactly like a new tab from here.
+
+**A browser model's window is small, and the auto-scaling had to learn that.**
+The attachment reports `n_ctx`; `LocalLlm::plan_prompt` turns it into a
+completion budget (a quarter of the window) and a retrieval budget — the
+`context_chars` of the `PromptPlan` it returns — and `/api/chat` and
+`/api/tour` clamp to them. The tour needed a second knob:
+`plan_tour` *grows* its planning prompt when `max_context_chars` is at or
+below the default, so clamping that field alone would have been silently
+undone. `TourOptions::context_hard_cap` is the ceiling the auto-scaling
+cannot climb back over.
+
+**The retrieval controls are capped to the window too.** `UiLimits` turns the
+character budget into ceilings for `k`, Find's result count, hops and tour
+stops; the panel caps its own inputs from them (and says why in the tooltip)
+while `/api/chat` and `/api/tour` apply them again, so a stale tab or a curl
+cannot ask for a pack that will not fit.
+
+**A model with no tool template — or no talent for one — is not given tools.**
+`/api/chat` turns its seed retrieval off when the toolbox is on, on the
+assumption the model will search for itself. A GGUF without a tool-calling
+chat template — the 138 MB sanity model, say — would then answer every
+question from no context at all, so the toolbox is only offered to a model
+the page marked as able to use it. That flag is not only about the template:
+Qwen3 0.6B *has* one and, given tools, writes `<search>{…}</search>` into its
+answer instead of calling anything — so the catalog ships it with tools off
+and a checkbox under Advanced to override.
+
+**Nothing about the attachment is persisted server-side.** Restart `ug serve`
+and it is back to your own configured endpoint; the *browser* remembers which
+model you were using and re-offers it when the page loads. A `POST
+/api/config` while a tab is serving keeps the bridge in force and makes the
+rebuilt config what detaching restores (`reapply_after_config_rebuild`).
+
+---
+
 ## Dependencies
 
 | Phase | Adds |
@@ -361,6 +461,7 @@ Sample output:
 | 1.5 | `flate2 = "1"`, `brotli = "8"` (startup-time pre-compression at quality 9), `tracing = "0.1"`, `tracing-subscriber = "0.3"` (env-filter, fmt), `tower-http` `trace` feature |
 | 2 | nothing — uses crates already in the workspace |
 | 3 | nothing — `overgraph`, `reqwest`, `serde_json`, `tokio::sync` are already in the tree |
+| 5 | nothing in Cargo.toml — the wllama runtime is a vendored JS+wasm pair under `native/vendor/wllama/`, embedded with `include_bytes!` |
 
 ---
 
@@ -380,6 +481,7 @@ Sample output:
 - A `Host` / `Origin` guard (`guard_host`, outermost layer) is what actually closes rebinding: requests whose `Host` names a domain rather than a loopback name or bare IP are rejected with 403, as are cross-site `Origin`s. Set `UG_ALLOWED_HOSTS` (comma-separated hostnames) when running behind a reverse proxy that forwards a real domain.
 - The two routes that accept a caller-supplied filesystem path — `/api/browse-dir` and `/api/generate` — are confined to the user's home directory, `$UG_HOME`, and the server's working directory. `UG_BROWSE_ROOTS` (colon-separated) adds more, for repos on another volume. Without this, the two compose into a whole-machine read: index a sensitive directory as a project, then read it back through `/api/file`.
 - `/api/chat` and `/api/tour` accept a per-request `chat_base_url`, but a request-supplied endpoint **never** inherits the server's stored `chat.api_key` — it must bring its own key or go keyless. Otherwise a single unauthenticated POST would have the server deliver the user's real API key to an attacker-named endpoint. Cloud metadata hosts are refused outright.
+- The in-browser model bridge (`/api/llm/local/*`) is unauthenticated like every other route, so any process that can reach the server can spend the tab's model. It is bounded by the same loopback bind, CORS deny and `Host` guard, and it can only ever reach a browser the user themselves attached — but it is one more reason not to expose the port.
 - Request bodies are capped (4 MiB via `RequestBodyLimitLayer`) to bound abuse / OOM.
 - These are local-loopback mitigations only. `ug` has no built-in auth, rate limiting, or TLS. For anything beyond a single developer's machine, front the server with a reverse proxy that adds all three.
 

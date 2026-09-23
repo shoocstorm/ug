@@ -31,3 +31,19 @@ pub(crate) const VIS_MD: &str = include_str!("../../README.md");
 /// directory into every build of the page, and the demo shim must ship only
 /// in a published snapshot. See the file's own header for what it does.
 pub(crate) const VIS_DEMO_SHIM: &str = include_str!("./vis/demo-shim.js");
+
+// ---------- In-browser inference runtime (wllama) ----------
+
+/// Version of the vendored wllama build, used as a path segment in the URLs
+/// the page loads these from.
+///
+/// The runtime is served `immutable` with a year-long max-age — it is 8 MB
+/// that must not be re-fetched on every page load — so the *only* thing that
+/// invalidates a cached copy is this string changing. Bump it with the files
+/// in `native/vendor/wllama/`, never separately.
+pub(crate) const WLLAMA_VERSION: &str = "3.6.1";
+/// The wllama ES module: a self-contained bundle with no imports of its own.
+pub(crate) const WLLAMA_JS: &[u8] = include_bytes!("../vendor/wllama/wllama.js");
+/// llama.cpp as WebAssembly. Served uncompressed and byte-for-byte: this is
+/// the one asset the page instantiates rather than parses.
+pub(crate) const WLLAMA_WASM: &[u8] = include_bytes!("../vendor/wllama/wllama.wasm");

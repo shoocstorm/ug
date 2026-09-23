@@ -23,6 +23,26 @@
         // selectionRing / gizmo state.
         let threeGen = 0;
 
+        // ── Zoom stops ─────────────────────────────────────────
+        //
+        // Distances are orbit radii in layout units. At the camera's 50° FOV a
+        // distance of `d` shows about `0.93 × d` units of height, and the
+        // layout's link distance is 50 — so a distance reads most usefully as
+        // a number of hops.
+        //
+        // OrbitControls starts at [0, ∞]: the dolly runs straight through the
+        // node it is orbiting, and out until the graph is a speck. The near
+        // stop is absolute (a node's sticker disc is ~19 units across, so 60
+        // frames two of them and there is nothing further in to see); the far
+        // one has to follow the graph, and is set with the fog in
+        // `applyDepthCues`.
+        const THREE_MIN_DIST = 60;
+        // Multiples of the graph's own radius: far enough out that the whole
+        // thing is a small island, and no closer than a stop that would fight
+        // `threeSetView`, whose portrait-aspect fit reaches ~4.5 × radius.
+        const THREE_MAX_DIST_FACTOR = 8;
+        const THREE_MAX_DIST_FLOOR = 2500;
+
         // A soft circular glow texture (white radial gradient → transparent),
         // tinted per-node via the sprite colour. Built once and shared.
         function glowTexture() {
@@ -480,6 +500,12 @@
                 .width(width)
                 .height(height);
 
+            // The near stop is absolute, so it is live from the first frame.
+            // The far one needs a laid-out graph to be a share of and is set
+            // by `applyDepthCues`, which runs on every settle.
+            const orbit = Graph.controls && Graph.controls();
+            if (orbit) orbit.minDistance = THREE_MIN_DIST;
+
             const charge = Graph.d3Force('charge');
             if (charge) charge.strength(-70);
             // shorter Link distance, means closer connected nodes
@@ -590,6 +616,14 @@
             // Labels visible within ~half the graph radius of the camera; never
             // below the small-graph default so tiny graphs keep their labels.
             state._labelDist = Math.max(340, ext.radius * 0.5);
+            // The far zoom stop travels with the graph for the same reason the
+            // fog does: "too far out" is a statement about the graph's size,
+            // not about a number of units.
+            const controls = Graph && Graph.controls && Graph.controls();
+            if (controls) {
+                controls.minDistance = THREE_MIN_DIST;
+                controls.maxDistance = Math.max(THREE_MAX_DIST_FLOOR, ext.radius * THREE_MAX_DIST_FACTOR);
+            }
             const fog = Graph && Graph.scene().fog;
             if (fog) {
                 // Exponential fade into the paper-white, keyed to size — this is
@@ -651,7 +685,15 @@
             });
             // Clamped so a lone node isn't framed from inside it, and a sprawling
             // neighbourhood doesn't push the camera out past the whole graph.
-            const d = Math.max(300, Math.min(1500, radius * 2 + 200)) / Math.sqrt(3);
+            //
+            // The ceiling follows the graph rather than being a flat 1,500:
+            // "light up these fifty nodes" on a large repo spreads them across
+            // most of it, and a fixed cap left the camera inside the set it had
+            // been asked to frame — the nodes it was pointed at ended up behind
+            // it. Never below the flat number, so nothing gets tighter than it
+            // was on a small graph.
+            const far = Math.max(1500, (state._graphRadius || 0) * 2.5);
+            const d = Math.max(300, Math.min(far, radius * 2 + 200)) / Math.sqrt(3);
             Graph.cameraPosition(
                 { x: centre.x + d, y: centre.y + d * 0.8, z: centre.z + d },
                 centre,
@@ -809,9 +851,18 @@
             requestAnimationFrame(() => {
                 const x = +n.x || 0, y = +n.y || 0, z = +n.z || 0;
                 // Total camera-to-node distance (the (d,d,d) offset has magnitude
-                // sqrt(3)*d). Pulled well back so a generous slice of the
-                // surrounding neighbourhood stays in frame on focus.
-                const d = 480 / Math.sqrt(3);
+                // sqrt(3)*d). A share of the graph's own radius, so "zoom to
+                // this node" is the same step in on a 200-node repo as on a
+                // 100k one; a fixed 480 units was a comfortable slice of a
+                // small graph and a nosedive into a large one, where it framed
+                // a handful of nodes with nothing around them to place it.
+                // Clamped so a tiny graph is not framed from orbit, and a
+                // sprawling one does not leave the camera on the far side of
+                // itself. `_graphRadius` is the 90th-percentile extent kept by
+                // applyDepthCues; absent (no layout yet) it falls back to the
+                // distance this used to fly to unconditionally.
+                const radius = state._graphRadius || 520;
+                const d = Math.max(620, Math.min(1500, radius * 1.1)) / Math.sqrt(3);
                 Graph.cameraPosition(
                     { x: x + d, y: y + d, z: z + d },
                     { x, y, z },
@@ -831,8 +882,13 @@
             const p = cam.position;
             const dx = p.x - t.x, dy = p.y - t.y, dz = p.z - t.z;
             const dist = Math.hypot(dx, dy, dz) || 1;
-            // Floor so the camera can't cross the orbit target.
-            const newDist = Math.max(dist * factor, Math.max(dist * 0.05, 2));
+            // The same stops the wheel obeys. OrbitControls would clamp this
+            // on its next update() anyway, but not until the tween below had
+            // already flown past them — so the button and the wheel would
+            // disagree about where the end of the zoom is.
+            const far = (typeof controls.maxDistance === 'number' && Number.isFinite(controls.maxDistance))
+                ? controls.maxDistance : Infinity;
+            const newDist = Math.min(far, Math.max(dist * factor, THREE_MIN_DIST));
             const k = newDist / dist;
             Graph.cameraPosition(
                 { x: t.x + dx * k, y: t.y + dy * k, z: t.z + dz * k },

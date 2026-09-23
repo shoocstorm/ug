@@ -303,6 +303,129 @@
          GET /api/config and saved via POST /api/config. CLI flags and
          env vars still outrank saved values — rows show a chip + note
          when that's happening so overrides are never silent. -->
+    <!-- ── Run a model in this browser ─────────────────────────────────
+         The panel for wllama: pick a GGUF, watch it download into OPFS,
+         hand it to the server as its chat endpoint. Shares the settings
+         overlay's chrome so it reads as part of the same app; everything
+         inside it is `llm-*`. Driven by js/28-local-llm.js. -->
+    <div id="llm-overlay" class="settings-overlay">
+        <div class="settings-panel llm-panel" role="dialog" aria-modal="true" aria-labelledby="llm-title">
+            <div class="settings-head">
+                <div class="settings-head-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="4" y="4" width="16" height="16" rx="3" />
+                        <rect x="9" y="9" width="6" height="6" rx="1" />
+                        <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" />
+                    </svg>
+                </div>
+                <div class="settings-head-text">
+                    <h2 id="llm-title">Model in this browser</h2>
+                    <p>Download a small model once and run it here — no API key, no server, nothing leaves this machine</p>
+                </div>
+                <button type="button" class="settings-close" id="llm-close" title="Close (Esc)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- What is happening right now: off, downloading, loading, live. -->
+            <div class="llm-status" id="llm-status">
+                <div class="llm-status-line">
+                    <span class="llm-dot" id="llm-status-dot"></span>
+                    <span class="llm-status-text" id="llm-status-text">Checking this browser…</span>
+                    <button type="button" class="settings-btn ghost llm-stop" id="llm-stop" hidden>Stop using it</button>
+                </div>
+                <div class="llm-progress" id="llm-progress" hidden>
+                    <div class="llm-bar"><div class="llm-bar-fill" id="llm-bar-fill"></div></div>
+                    <div class="llm-progress-meta">
+                        <span id="llm-progress-label"></span>
+                        <span id="llm-progress-pct"></span>
+                    </div>
+                </div>
+                <div class="llm-facts" id="llm-facts" hidden></div>
+            </div>
+
+            <div class="settings-body llm-body" id="llm-body">
+                <div class="llm-steps" id="llm-steps">
+                    <div class="llm-step"><span class="llm-step-n">1</span>
+                        <span><b>Pick a model below.</b> It downloads once into this
+                            browser's own storage and is reused every time after
+                            that — start with the 138 MB one if you just want to
+                            see it work.</span></div>
+                    <div class="llm-step"><span class="llm-step-n">2</span>
+                        <span><b>It starts here, in this tab.</b> UltraGraph then uses
+                            it for Answer, Tours and Walks — same questions, same
+                            citations, no API key and no model server.</span></div>
+                    <div class="llm-step"><span class="llm-step-n">3</span>
+                        <span><b>Nothing leaves this machine</b>, and once the weights
+                            are downloaded it works offline. Closing this tab stops
+                            the model.</span></div>
+                </div>
+                <div class="llm-env" id="llm-env"></div>
+
+                <h3 class="llm-section">Models</h3>
+                <ul class="llm-models" id="llm-models"></ul>
+
+                <details class="llm-custom" id="llm-custom">
+                    <summary>Load any GGUF from Hugging Face</summary>
+                    <p class="llm-hint">
+                        Paste a repo and the file inside it. Instruction-tuned
+                        models with a chat template work; base models will
+                        answer, but not usefully.
+                    </p>
+                    <div class="llm-custom-row">
+                        <input type="text" id="llm-custom-repo" placeholder="owner/repo" spellcheck="false" autocomplete="off">
+                        <input type="text" id="llm-custom-file" placeholder="model-Q4_K_M.gguf" spellcheck="false" autocomplete="off">
+                        <button type="button" class="settings-btn secondary" id="llm-custom-add">Add</button>
+                    </div>
+                </details>
+
+                <details class="llm-advanced" id="llm-advanced">
+                    <summary>Advanced</summary>
+                    <label class="llm-opt">
+                        <span>Context window</span>
+                        <!-- Labels are rewritten from the server's own budget
+                             (llmRenderCtxOptions) so they cannot drift from it. -->
+                        <select id="llm-ctx">
+                            <option value="2048">2048 tokens</option>
+                            <option value="4096">4096 tokens</option>
+                            <option value="8192" selected>8192 tokens</option>
+                            <option value="16384">16384 tokens</option>
+                        </select>
+                    </label>
+                    <p class="llm-hint" id="llm-ctx-hint"></p>
+                    <label class="llm-opt checkbox">
+                        <input type="checkbox" id="llm-gpu" checked>
+                        <span>Use the GPU through WebGPU when it is available</span>
+                    </label>
+                    <label class="llm-opt checkbox">
+                        <input type="checkbox" id="llm-tools">
+                        <span>Let this model drive ug's graph tools — search, read, find usages — itself</span>
+                    </label>
+                    <p class="llm-hint" id="llm-tools-hint"></p>
+                    <label class="llm-opt checkbox">
+                        <input type="checkbox" id="llm-think">
+                        <span>Let the model think before answering — better answers, much slower</span>
+                    </label>
+                    <label class="llm-opt checkbox">
+                        <input type="checkbox" id="llm-auto" checked>
+                        <span>Start the last model automatically when this page opens</span>
+                    </label>
+                </details>
+            </div>
+
+            <div class="settings-foot llm-foot">
+                <span class="settings-status" id="llm-foot-status">
+                    While a model runs here, Answer, Tours and Walks are generated in this tab.
+                </span>
+                <button type="button" class="settings-btn primary llm-next" id="llm-goto-ask" hidden>
+                    Ask something now
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div id="settings-overlay" class="settings-overlay">
         <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <div class="settings-head">
@@ -827,6 +950,15 @@
                             <line x1="12" y1="17" x2="12.01" y2="17" />
                         </svg>
                     </button>
+                    <button id="llm-open-btn" title="Run a language model in this browser" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="4" y="4" width="16" height="16" rx="3" />
+                            <rect x="9" y="9" width="6" height="6" rx="1" />
+                            <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" />
+                        </svg>
+                        <span class="llm-btn-dot" id="llm-btn-dot" hidden></span>
+                    </button>
                     <button id="settings-open-btn" title="Settings (model, endpoints)" type="button">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round">
@@ -1061,14 +1193,16 @@
                             UltraGraph at any OpenAI-compatible endpoint — a local one (Ollama,
                             LM Studio, llama.cpp) or a hosted API — and it turns on straight
                             away. Nothing else here needs it.
-                            <button class="cap-cta" type="button" data-open-settings>Set up a model</button>
+                            <button class="cap-cta" type="button" data-open-llm>Run one in this browser</button>
+                            <button class="cap-cta ghost" type="button" data-open-settings>Use my own endpoint</button>
                         </div>
                         <!-- Tours still run without a model; only the narration needs one. -->
                         <div class="cap-banner warn" id="tour-nollm-msg" hidden>
                             <strong>No language model configured.</strong>
                             Tours still run — you'll get the most relevant stops in ranked order —
                             but the guide can't write the narration or order the route into a story.
-                            <button class="cap-cta" type="button" data-open-settings>Set up a model</button>
+                            <button class="cap-cta" type="button" data-open-llm>Run one in this browser</button>
+                            <button class="cap-cta ghost" type="button" data-open-settings>Use my own endpoint</button>
                         </div>
                     </div>
 

@@ -11,6 +11,7 @@
 //!   - `nidx`          - the binary slim index served at `/api/graph/nodes.bin`
 //!   - `gen_jobs`      - background `ug gen` jobs (KB Manager wizard)
 //!   - `host_guard`    - DNS-rebinding allowlist middleware
+//!   - `local_llm`     - the browser tab as an OpenAI-compatible endpoint
 //!   - `watch`         - Phase 1.5 file-watch reload
 //!   - `router`        - `build_router` + static handlers
 //!   - `api`           - graph.json-backed read API (Phase 2 + capabilities)
@@ -26,6 +27,7 @@ pub(crate) mod endpoints;
 pub(crate) mod gen_jobs;
 pub(crate) mod git_api;
 pub(crate) mod host_guard;
+pub(crate) mod local_llm;
 pub(crate) mod nidx;
 pub(crate) mod projects_api;
 pub(crate) mod registry;
@@ -53,6 +55,7 @@ use ultragraph::{C_BOLD, C_CYAN, C_GREEN, C_RESET, C_YELLOW};
 pub(crate) use api::{err_json, ok_json};
 pub(crate) use encoding::EncodedAsset;
 pub(crate) use gen_jobs::GenJobs;
+pub(crate) use local_llm::LocalLlm;
 pub(crate) use registry::{
     build_project_context, snapshot_cache_budget, ProjectContext, ProjectRegistry, ServeMode,
     ServeStores,
@@ -106,6 +109,10 @@ pub(crate) struct ServeState {
     /// The *policy* is per-server (`--graph-mode`); the mode it resolves to is
     /// per-project, because size is a property of the graph.
     graph_mode: GraphModePolicy,
+    /// The in-browser model bridge. Empty until a tab loads a GGUF and
+    /// attaches it; from then on it *is* `chat_default`, and every chat, tour
+    /// and walk is answered by that tab. See `serve/local_llm.rs`.
+    local_llm: Arc<LocalLlm>,
 }
 
 impl ServeState {
@@ -428,7 +435,10 @@ pub fn run_serve(args: &[String]) {
                 "chat endpoint configured"
             );
         } else {
-            tracing::info!("chat endpoint not configured (/api/chat will return 503)");
+            tracing::info!(
+                "chat endpoint not configured — set one with `ug config set chat.model`, \
+                 or open the UI and run a model in the browser (no setup, no key)"
+            );
         }
 
         let state = ServeState {
@@ -444,6 +454,7 @@ pub fn run_serve(args: &[String]) {
             gen_jobs: Arc::new(GenJobs::new()),
             staleness: Arc::new(RwLock::new(None)),
             graph_mode,
+            local_llm: Arc::new(LocalLlm::new(port)),
         };
 
         let app = build_router(state.clone());
@@ -455,6 +466,12 @@ pub fn run_serve(args: &[String]) {
                 std::process::exit(1);
             }
         };
+
+        // `-p 0` asks the OS for a port, and the bridge URL the browser model
+        // is reached on has to be the one we actually got.
+        if let Ok(local) = listener.local_addr() {
+            state.local_llm.set_port(local.port());
+        }
 
         let db_api_enabled = state.stores().is_some() && state.embedder.is_some();
         let db_unavailable = state.db_unavailable_reason();

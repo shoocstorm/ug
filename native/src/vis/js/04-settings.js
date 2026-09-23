@@ -52,7 +52,16 @@
         // 200,000. Nothing re-runs that decision once the real value lands.
         // See P12.6 in docs/dev/PERF-TUNING-JOURNEY.md.
         let capabilitiesPromise = null;
-        function getCapabilities() {
+        /// `force` re-fetches instead of handing back the memoized answer.
+        ///
+        /// The memo is right for the many callers that just want to know what
+        /// the server could do at page load, and wrong for every caller that
+        /// has just *changed* what the server can do: an ingest that gave it
+        /// vectors, or a model attaching from the browser. Those got the
+        /// pre-change payload back and re-rendered the banner they were
+        /// trying to retire.
+        function getCapabilities(force) {
+            if (force) capabilitiesPromise = null;
             if (!capabilitiesPromise) {
                 capabilitiesPromise = fetch('/api/capabilities')
                     .then(res => (res.ok ? res.json() : null))
@@ -65,7 +74,7 @@
             return capabilitiesPromise;
         }
 
-        async function probeCapabilities() {
+        async function probeCapabilities(force) {
             const dot = document.querySelector('.sidebar-header .brand-dot');
 
             // Four banner slots, at most one of the first three shown. They
@@ -81,7 +90,7 @@
             const show = (el, on) => { if (el) el.hidden = !on; };
 
             try {
-                const caps = await getCapabilities();
+                const caps = await getCapabilities(force);
                 if (!caps) throw new Error('capabilities unavailable');
                 state.capabilities = caps;
 
@@ -131,6 +140,11 @@
                     chatBadgePill.title = `Chat model: ${caps.chat.model}\nBase URL: ${caps.chat.base_url || '?'}`;
                 }
 
+                // A model running in this tab is also a chat model, and it is
+                // the one the two banners above are offering. It rewrites the
+                // badge with something a human recognises. (js/28-local-llm.js)
+                llmOnCapabilities(caps);
+
                 // The trail and the tour history both survive page loads and
                 // both key on the project, so neither can be read until
                 // capabilities have named it.
@@ -144,6 +158,7 @@
                 renderAskOrient();
             } catch (err) {
                 state.capabilities = { db_ready: false, embedder_ready: false, search_ready: false, chat_ready: false };
+                llmOnCapabilities(null);
                 if (semNote) semNote.textContent = 'Capabilities probe failed — server unreachable?';
                 show(semNote, true);
                 show(noEmb, false);
@@ -274,7 +289,9 @@
                     // re-probe; probeCapabilities hides the banner once
                     // search_ready flips true.
                     setTimeout(async () => {
-                        await probeCapabilities();
+                        // Force: the whole point is that `search_ready` just
+                        // changed, and the memoized answer predates it.
+                        await probeCapabilities(true);
                         finishIngest(false);
                     }, 600);
                 } else {

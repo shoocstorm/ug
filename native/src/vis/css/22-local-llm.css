@@ -1,0 +1,470 @@
+        /* ── Model in this browser (js/28-local-llm.js) ──────────────
+           The panel reuses the settings overlay's chrome — same backdrop,
+           same head, same buttons — so it reads as one app rather than a
+           bolt-on. Everything below is only the parts settings has no
+           equivalent of: the live status strip, the capability chips and
+           the model cards. */
+
+        .llm-panel {
+            max-width: 680px;
+        }
+
+        /* The status strip sits between the head and the body, above the
+           scroll, because it is the one thing that must stay visible while
+           you scroll a list of models. */
+        .llm-status {
+            padding: 12px 22px 14px;
+            border-bottom: 1px solid var(--border-soft);
+            background: rgba(var(--accent-rgb), 0.04);
+        }
+
+        .llm-status-line {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .llm-status-text {
+            flex: 1;
+            font-size: 13px;
+            color: var(--text-soft);
+        }
+
+        .llm-stop {
+            flex: none;
+        }
+
+        /* The `hidden` attribute is only a user-agent `display: none`, so any
+           rule here that sets `display` outranks it and the element the
+           script "hid" stays on screen. Everything in this panel that is
+           toggled from JS *and* has a display of its own is listed here —
+           add to this list when you add another. */
+        .settings-btn[hidden],
+        .llm-steps[hidden],
+        .llm-facts[hidden],
+        .llm-progress[hidden] {
+            display: none;
+        }
+
+        .llm-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            flex: none;
+            background: var(--text-dim);
+        }
+
+        .llm-dot.live {
+            background: var(--accent);
+            box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+        }
+
+        .llm-dot.busy {
+            background: var(--warning);
+            animation: llm-pulse 1.1s ease-in-out infinite;
+        }
+
+        .llm-dot.warn {
+            background: var(--warning);
+        }
+
+        .llm-dot.error {
+            background: var(--danger);
+        }
+
+        @keyframes llm-pulse {
+            50% {
+                opacity: 0.35;
+            }
+        }
+
+        .llm-progress {
+            margin-top: 10px;
+        }
+
+        .llm-bar {
+            height: 5px;
+            border-radius: 999px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            overflow: hidden;
+        }
+
+        .llm-bar-fill {
+            height: 100%;
+            width: 0;
+            background: var(--accent);
+            transition: width 0.25s ease;
+        }
+
+        .llm-progress-meta {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 5px;
+            font-size: 11px;
+            font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+            color: var(--text-muted);
+        }
+
+        .llm-facts {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            margin-top: 10px;
+            font-size: 11.5px;
+            color: var(--text-muted);
+        }
+
+        .llm-facts b {
+            color: var(--text-soft);
+            font-weight: 600;
+        }
+
+        .llm-body {
+            padding-top: 16px;
+        }
+
+        /* What this browser can actually do. Shown before the model list
+           because "single thread" is the difference between a model that is
+           pleasant and one that is not, and it is better read before the
+           download than after it. */
+        .llm-env {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 18px;
+        }
+
+        .llm-chip {
+            font-size: 11px;
+            padding: 4px 9px;
+            border-radius: 999px;
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+            cursor: help;
+        }
+
+        .llm-chip.ok {
+            color: var(--accent-soft);
+            border-color: rgba(var(--accent-rgb), 0.35);
+        }
+
+        .llm-chip.off {
+            color: var(--warning);
+            border-color: rgba(251, 191, 36, 0.3);
+        }
+
+        .llm-section {
+            margin: 0 0 10px;
+            font-size: 11px;
+            letter-spacing: 1.1px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            font-weight: 600;
+        }
+
+        .llm-models {
+            list-style: none;
+            margin: 0 0 18px;
+            padding: 0;
+            display: grid;
+            gap: 9px;
+        }
+
+        .llm-model {
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            padding: 12px 14px;
+            background: var(--bg-elevated);
+        }
+
+        .llm-model.active {
+            border-color: rgba(var(--accent-rgb), 0.45);
+            background: rgba(var(--accent-rgb), 0.07);
+        }
+
+        .llm-model-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .llm-model-name {
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .llm-model-quant,
+        .llm-model-size {
+            font-size: 11px;
+            font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+            color: var(--text-dim);
+        }
+
+        .llm-model-size {
+            margin-left: auto;
+        }
+
+        .llm-badge {
+            font-size: 10px;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            padding: 3px 7px;
+            border-radius: 999px;
+            border: 1px solid var(--border-soft);
+            color: var(--text-muted);
+        }
+
+        .llm-badge.rec {
+            color: var(--accent-soft);
+            border-color: rgba(var(--accent-rgb), 0.35);
+        }
+
+        .llm-badge.cached {
+            color: var(--text-soft);
+        }
+
+        .llm-badge.live {
+            color: var(--accent-ink);
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .llm-model-blurb {
+            margin: 6px 0 0;
+            font-size: 12.5px;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+
+        .llm-model-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .llm-model-actions .settings-btn {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .settings-btn.danger {
+            color: var(--danger);
+        }
+
+        .llm-custom,
+        .llm-advanced {
+            border-top: 1px solid var(--border-soft);
+            padding-top: 12px;
+            margin-top: 4px;
+        }
+
+        .llm-custom > summary,
+        .llm-advanced > summary {
+            cursor: pointer;
+            font-size: 12.5px;
+            color: var(--text-soft);
+            list-style: none;
+        }
+
+        .llm-custom > summary::before,
+        .llm-advanced > summary::before {
+            content: '▸';
+            display: inline-block;
+            width: 14px;
+            color: var(--text-dim);
+        }
+
+        .llm-custom[open] > summary::before,
+        .llm-advanced[open] > summary::before {
+            transform: rotate(90deg);
+        }
+
+        .llm-hint {
+            font-size: 11.5px;
+            line-height: 1.55;
+            color: var(--text-dim);
+            margin: 8px 0;
+        }
+
+        .llm-custom-row {
+            display: flex;
+            gap: 8px;
+            margin: 8px 0 4px;
+        }
+
+        .llm-custom-row input {
+            flex: 1;
+            min-width: 0;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            padding: 7px 10px;
+            color: var(--text);
+            font: inherit;
+            font-size: 12.5px;
+        }
+
+        .llm-custom-row input:focus {
+            outline: none;
+            border-color: rgba(var(--accent-rgb), 0.5);
+        }
+
+        .llm-opt {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 10px 0;
+            font-size: 12.5px;
+            color: var(--text-soft);
+        }
+
+        .llm-opt.checkbox {
+            align-items: flex-start;
+        }
+
+        .llm-opt select {
+            background: var(--bg-deep);
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            color: var(--text);
+            padding: 6px 9px;
+            font: inherit;
+            font-size: 12.5px;
+        }
+
+        .llm-opt input[type="checkbox"] {
+            accent-color: var(--accent);
+            margin-top: 2px;
+        }
+
+        .llm-foot {
+            font-size: 11.5px;
+        }
+
+        /* Three lines of "what happens if I click this", shown only while
+           nothing is running. The download is hundreds of megabytes and the
+           first question people have is what it costs them. */
+        .llm-steps {
+            display: grid;
+            gap: 8px;
+            margin: 0 0 18px;
+            padding: 12px 14px;
+            border: 1px dashed var(--border-soft);
+            border-radius: 12px;
+            background: var(--bg-elevated);
+        }
+
+        .llm-step {
+            display: flex;
+            gap: 10px;
+            align-items: baseline;
+            font-size: 12.5px;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+
+        .llm-step b {
+            color: var(--text-soft);
+            font-weight: 600;
+        }
+
+        .llm-step-n {
+            flex: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+            color: var(--accent-ink);
+            background: var(--accent);
+            align-self: flex-start;
+        }
+
+        .llm-next {
+            flex: none;
+            margin-left: auto;
+        }
+
+        /* The always-visible tells: a dot on the sidebar button, and the
+           model pill in the Ask column. Both exist so that "my browser is
+           doing the work" is never a surprise. */
+
+        /* Every button in the sidebar header is styled by its own id — there
+           is no shared class — so a new one with no rule of its own falls
+           back to the browser's default button chrome, and its `<svg>` to the
+           300x150 default intrinsic size. That is why this block is not
+           optional: without it the icon renders enormous and clipped. */
+        #llm-open-btn {
+            position: relative;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        #llm-open-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent);
+        }
+
+        #llm-open-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* Running: the button itself carries the accent, not just the dot. */
+        #llm-open-btn.live {
+            color: var(--accent);
+        }
+
+        .llm-btn-dot {
+            position: absolute;
+            top: 1px;
+            right: 1px;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 1px solid var(--bg-surface);
+        }
+
+        .llm-btn-dot.busy {
+            background: var(--warning);
+            animation: llm-pulse 1.1s ease-in-out infinite;
+        }
+
+        .llm-btn-dot.working {
+            animation: llm-pulse 0.7s ease-in-out infinite;
+        }
+
+        .sem-dest-badge.in-browser {
+            cursor: pointer;
+            border-color: rgba(var(--accent-rgb), 0.4);
+            color: var(--accent-soft);
+        }
+
+        .cap-cta.ghost {
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            color: var(--text-soft);
+        }
+
+        /* A retrieval input the local model's window is holding down. The
+           tooltip says by how much and why; this is just the tell that the
+           number on screen is not the one you set. */
+        .chat-num.llm-capped {
+            border-color: rgba(var(--accent-rgb), 0.45);
+            color: var(--accent-soft);
+        }
