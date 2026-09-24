@@ -2607,6 +2607,30 @@ button with no rule of its own therefore gets default button chrome and an
 wrong but clicking still works" looks like. Copy the block when adding a
 button there, or the icon is the first thing anyone notices.
 
+### 11s. Headless cannot measure anything the compositor pays for
+
+Freezing the graph while an in-browser model generates looked like a 39% CPU
+win in headless Chrome. Running it again — three samples an arm instead of
+one — it was **-2%**: noise, in both directions, from answers that differed
+in length by a third. The honest number came from a *visible* window on the
+real GPU: 8% less CPU and 10% less wall-clock per generated character.
+
+Two rules, and the second is the one that cost the time.
+
+**A headless page is not a rendering page.** With no display there is no
+vsync and no compositing, and the idle page cost 0.2 CPU-seconds per 6
+seconds of wall — 3% of a core. There was nothing to reclaim, so the
+experiment could not have shown anything either way. Anything whose cost is
+*drawing* has to be measured with a window on screen, which `--headless=new`
+is not; launch Chrome with `--window-position` instead and accept the window.
+
+**Normalise before you compare, then repeat.** A model at `temperature: 0`
+through a GPU backend still answers with 815 characters one run and 1 663 the
+next, so "CPU seconds per answer" measures the answer, not the change. Divide
+by the work done (CPU-ms per character), run each arm at least three times,
+and treat a single-sample delta as a hypothesis — §11i, again, on a different
+kind of measurement.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

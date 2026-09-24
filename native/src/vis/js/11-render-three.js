@@ -1971,6 +1971,16 @@
             // scoping it would buy a branch rather than time.
             restyle() { threeRestyle(); },
 
+            // force-graph draws every frame whether or not anything moved, so
+            // stopping its loop is the difference between a GPU shared with
+            // the local model and one fighting it. The canvas keeps its last
+            // frame — the graph freezes rather than blanking.
+            setPaused(on) {
+                if (!Graph) return;
+                if (on) Graph.pauseAnimation();
+                else Graph.resumeAnimation();
+            },
+
             resize(w, h) { if (Graph) Graph.width(w).height(h); },
 
             frameAll(ms) { threeSetView('3d', ms); },

@@ -278,6 +278,21 @@
         // that need a capability rather than a dispatcher reach for this.
         function activeRenderer() { return R; }
 
+        /// Stop (or restart) the backend's draw loop.
+        ///
+        /// Exists for one caller: a model running in this tab shares the GPU
+        /// and the cores with the renderer, and a graph redrawing at 120 Hz
+        /// behind a streaming answer is work nobody asked for. Backends that
+        /// cannot pause simply ignore it.
+        function renderSetPaused(on) {
+            if (!R || typeof R.setPaused !== 'function') return;
+            try {
+                R.setPaused(!!on);
+            } catch (err) {
+                console.warn('renderer pause failed', err);
+            }
+        }
+
         function whenRendererReady(fn) {
             if (R) { fn(R); return; }
             _pendingRenderOps.push(fn);

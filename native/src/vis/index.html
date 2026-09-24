@@ -409,6 +409,11 @@
                         <span>Let the model think before answering — better answers, much slower</span>
                     </label>
                     <label class="llm-opt checkbox">
+                        <input type="checkbox" id="llm-pause-graph" checked>
+                        <span>Freeze the graph while the model is working — it shares the GPU, and
+                            an idle canvas at 120 fps is what makes generating feel slow</span>
+                    </label>
+                    <label class="llm-opt checkbox">
                         <input type="checkbox" id="llm-auto" checked>
                         <span>Start the last model automatically when this page opens</span>
                     </label>

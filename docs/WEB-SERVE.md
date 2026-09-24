@@ -395,13 +395,15 @@ the path because both are served `immutable` for a year — see
 ### Checking it
 
 `cargo nextest run -E 'test(local_llm)'` covers the hub and the routes.
+`scripts/local-llm-bench.mjs` measures what freezing the graph is worth (it
+needs a visible window — see Agents.md §11s for why headless cannot answer).
 Neither can cover the browser half, so `scripts/local-llm-e2e.mjs` does: it
 starts `ug serve`, drives the real page in headless Chrome over CDP, clicks
 through to download and run Qwen3 0.6B, and then asks `/api/chat` and
 `/api/tour` for answers. With `KEEP_PROFILE=<dir>` the weights stay cached
 between runs and the whole thing takes under a minute.
 
-### Six things that are not obvious
+### Seven things that are not obvious
 
 **The page must be cross-origin isolated.** `handle_index` sets
 `Cross-Origin-Opener-Policy: same-origin` and
@@ -444,6 +446,18 @@ the page marked as able to use it. That flag is not only about the template:
 Qwen3 0.6B *has* one and, given tools, writes `<search>{…}</search>` into its
 answer instead of calling anything — so the catalog ships it with tools off
 and a checkbox under Advanced to override.
+
+**The model and the renderer want the same hardware.** Generating with the
+canvas live took a 120 fps page to about 6, with the GPU pinned near 100% —
+the graph redrawing behind a streaming answer is work nobody asked for. The
+page therefore freezes the renderer for the length of a job
+(`renderSetPaused`, implemented as `pauseAnimation` for three.js and
+`pause()` for cosmos.gl) and caps inference at `cores - 2` threads, to at
+most eight. Measured on a 5 901-node graph with a real GPU: 8% less CPU and
+10% less wall-clock per generated character, and the canvas stops stuttering
+because it stops drawing. The win scales with the graph — this one is small.
+There is an off switch under Advanced for anyone who wants to watch the
+layout while they ask about it.
 
 **Nothing about the attachment is persisted server-side.** Restart `ug serve`
 and it is back to your own configured endpoint; the *browser* remembers which

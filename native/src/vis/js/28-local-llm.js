@@ -99,7 +99,7 @@
             running: null,
             cancelled: new Set(),
             custom: [],
-            prefs: { nCtx: 8192, gpu: true, think: false, auto: true, last: null, tools: {} },
+            prefs: { nCtx: 8192, gpu: true, think: false, auto: true, last: null, tools: {}, pauseGraph: true },
         };
 
         function llmSupported() {
@@ -114,6 +114,16 @@
             if (!n && n !== 0) return '—';
             if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
             return Math.round(n / 1024 / 1024) + ' MB';
+        }
+
+        /// Threads for inference, leaving room for everything else on screen.
+        ///
+        /// Two cores held back, and never more than eight: llama.cpp scales
+        /// poorly past that on consumer hardware, and every extra thread is
+        /// one more thing contending with the renderer.
+        function llmThreadBudget() {
+            const cores = navigator.hardwareConcurrency || 4;
+            return Math.max(1, Math.min(cores - 2, 8));
         }
 
         function llmModelUrl(entry) {
@@ -457,6 +467,8 @@
             if (think) think.checked = !!llm.prefs.think;
             const auto = llmEl('llm-auto');
             if (auto) auto.checked = !!llm.prefs.auto;
+            const pause = llmEl('llm-pause-graph');
+            if (pause) pause.checked = llm.prefs.pauseGraph !== false;
             const tools = llmEl('llm-tools');
             if (tools) {
                 const entry = llm.entry || llmFindEntry(llm.prefs.last);
@@ -531,6 +543,9 @@
             llm.busy = true;
             llm.entry = entry;
             llm.served = 0;
+            // Loading is as GPU-hungry as generating: the weights are being
+            // uploaded and the context allocated.
+            llmSetGraphPaused(true);
             llmSetPhase('downloading', '');
             llmRenderModels();
 
@@ -550,6 +565,11 @@
                 await wllama.loadModelFromUrl(llmModelUrl(entry), {
                     n_ctx: llm.prefs.nCtx,
                     n_gpu_layers: useGpu ? 999 : 0,
+                    // Leave the machine something to draw with. wllama
+                    // defaults to every core, which on a CPU-backed run means
+                    // the renderer, the compositor and this page's own
+                    // JavaScript are all fighting the model for a thread.
+                    n_threads: llmThreadBudget(),
                     // Keep `<think>` in the text we stream so this file can
                     // fold it away itself; the default parser routes it to a
                     // field the stream does not carry.
@@ -581,6 +601,7 @@
                 llmSetPhase('error', llmReadableError(err));
             } finally {
                 llm.busy = false;
+                llmSetGraphPaused(false);
                 llmRenderModels();
                 llmRefreshCache();
             }
@@ -771,6 +792,7 @@
                 return;
             }
 
+            llmSetGraphPaused(true);
             const req = job.request || {};
             const wantsTools = Array.isArray(req.tools) && req.tools.length > 0;
             const ctrl = new AbortController();
@@ -850,8 +872,38 @@
             } finally {
                 llm.cancelled.delete(job.id);
                 llm.running = null;
+                llmSetGraphPaused(false);
                 llmSetPhase(llm.attached ? 'live' : 'off');
             }
+        }
+
+        /// Freeze the graph while the model works.
+        ///
+        /// Inference and the renderer want the same GPU: generating with the
+        /// canvas live took the page from 120 fps to about 6, with the GPU
+        /// pinned near 100%. The graph is not what anyone is looking at while
+        /// an answer streams, so it stops — and gets the GPU back, which
+        /// makes the answer faster too. Off switch under Advanced, for anyone
+        /// watching a layout settle while they ask about it.
+        ///
+        /// Counted rather than toggled: a queued job must not un-pause the
+        /// one still running.
+        function llmSetGraphPaused(on) {
+            llm.pauseDepth = Math.max(0, (llm.pauseDepth || 0) + (on ? 1 : -1));
+            llmApplyGraphPause();
+        }
+
+        /// Reconcile the renderer with the depth *and* the preference.
+        ///
+        /// Split from the counter because the preference can change while a
+        /// job is running: an early return on the way out would have left the
+        /// graph frozen for good the moment someone unticked the box.
+        function llmApplyGraphPause() {
+            const want = llm.prefs.pauseGraph !== false && (llm.pauseDepth || 0) > 0;
+            if (want === llm.graphPaused) return;
+            llm.graphPaused = want;
+            if (typeof renderSetPaused === 'function') renderSetPaused(want);
+            document.body.classList.toggle('llm-graph-paused', want);
         }
 
         function llmPost(url, body) {
@@ -972,10 +1024,13 @@
                     llmRender();
                 }
             });
-            for (const [id, key] of [['llm-gpu', 'gpu'], ['llm-think', 'think'], ['llm-auto', 'auto']]) {
+            for (const [id, key] of [['llm-gpu', 'gpu'], ['llm-think', 'think'], ['llm-auto', 'auto'], ['llm-pause-graph', 'pauseGraph']]) {
                 llmEl(id).addEventListener('change', (e) => {
                     llm.prefs[key] = e.target.checked;
                     llmSavePrefs();
+                    // Unticking mid-answer has to give the graph back now,
+                    // not after the next one.
+                    if (key === 'pauseGraph') llmApplyGraphPause();
                 });
             }
 

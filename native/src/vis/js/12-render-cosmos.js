@@ -2219,6 +2219,15 @@
 
             emitSweep(spec) { overlayEmitSweep(spec); },
 
+            // The force simulation is a chain of GPU passes per frame, and it
+            // is the part that competes with a model running on the same GPU.
+            // Pausing leaves the layout exactly where it is.
+            setPaused(on) {
+                if (!cosmos) return;
+                if (on) cosmos.pause?.();
+                else cosmos.unpause?.();
+            },
+
             screenPos(n) {
                 if (!cosmos || !n || !Number.isFinite(n.x)) return null;
                 const p = cosmos.spaceToScreenPosition([n.x, n.y]);

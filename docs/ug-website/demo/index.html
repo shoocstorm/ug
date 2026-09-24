@@ -10840,7 +10840,7 @@ body:has(#info.visible) #perf-hud {
         }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.21","visFingerprint":"b8894af78b1688f9","generatedAt":1790169103};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":3738,"edges":10801,"files":136,"lines":84798,"ugVersion":"0.1.21","visFingerprint":"ac9f4ce65ce9d7eb","generatedAt":1790171745};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -11633,6 +11633,11 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                     <label class="llm-opt checkbox">
                         <input type="checkbox" id="llm-think">
                         <span>Let the model think before answering — better answers, much slower</span>
+                    </label>
+                    <label class="llm-opt checkbox">
+                        <input type="checkbox" id="llm-pause-graph" checked>
+                        <span>Freeze the graph while the model is working — it shares the GPU, and
+                            an idle canvas at 120 fps is what makes generating feel slow</span>
                     </label>
                     <label class="llm-opt checkbox">
                         <input type="checkbox" id="llm-auto" checked>
@@ -21857,6 +21862,21 @@ self.onmessage = async (ev) => {
         // that need a capability rather than a dispatcher reach for this.
         function activeRenderer() { return R; }
 
+        /// Stop (or restart) the backend's draw loop.
+        ///
+        /// Exists for one caller: a model running in this tab shares the GPU
+        /// and the cores with the renderer, and a graph redrawing at 120 Hz
+        /// behind a streaming answer is work nobody asked for. Backends that
+        /// cannot pause simply ignore it.
+        function renderSetPaused(on) {
+            if (!R || typeof R.setPaused !== 'function') return;
+            try {
+                R.setPaused(!!on);
+            } catch (err) {
+                console.warn('renderer pause failed', err);
+            }
+        }
+
         function whenRendererReady(fn) {
             if (R) { fn(R); return; }
             _pendingRenderOps.push(fn);
@@ -24200,6 +24220,16 @@ self.onmessage = async (ev) => {
             // scoping it would buy a branch rather than time.
             restyle() { threeRestyle(); },
 
+            // force-graph draws every frame whether or not anything moved, so
+            // stopping its loop is the difference between a GPU shared with
+            // the local model and one fighting it. The canvas keeps its last
+            // frame — the graph freezes rather than blanking.
+            setPaused(on) {
+                if (!Graph) return;
+                if (on) Graph.pauseAnimation();
+                else Graph.resumeAnimation();
+            },
+
             resize(w, h) { if (Graph) Graph.width(w).height(h); },
 
             frameAll(ms) { threeSetView('3d', ms); },
@@ -26475,6 +26505,15 @@ self.onmessage = async (ev) => {
             },
 
             emitSweep(spec) { overlayEmitSweep(spec); },
+
+            // The force simulation is a chain of GPU passes per frame, and it
+            // is the part that competes with a model running on the same GPU.
+            // Pausing leaves the layout exactly where it is.
+            setPaused(on) {
+                if (!cosmos) return;
+                if (on) cosmos.pause?.();
+                else cosmos.unpause?.();
+            },
 
             screenPos(n) {
                 if (!cosmos || !n || !Number.isFinite(n.x)) return null;
@@ -35877,7 +35916,7 @@ self.onmessage = async (ev) => {
             running: null,
             cancelled: new Set(),
             custom: [],
-            prefs: { nCtx: 8192, gpu: true, think: false, auto: true, last: null, tools: {} },
+            prefs: { nCtx: 8192, gpu: true, think: false, auto: true, last: null, tools: {}, pauseGraph: true },
         };
 
         function llmSupported() {
@@ -35892,6 +35931,16 @@ self.onmessage = async (ev) => {
             if (!n && n !== 0) return '—';
             if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
             return Math.round(n / 1024 / 1024) + ' MB';
+        }
+
+        /// Threads for inference, leaving room for everything else on screen.
+        ///
+        /// Two cores held back, and never more than eight: llama.cpp scales
+        /// poorly past that on consumer hardware, and every extra thread is
+        /// one more thing contending with the renderer.
+        function llmThreadBudget() {
+            const cores = navigator.hardwareConcurrency || 4;
+            return Math.max(1, Math.min(cores - 2, 8));
         }
 
         function llmModelUrl(entry) {
@@ -36235,6 +36284,8 @@ self.onmessage = async (ev) => {
             if (think) think.checked = !!llm.prefs.think;
             const auto = llmEl('llm-auto');
             if (auto) auto.checked = !!llm.prefs.auto;
+            const pause = llmEl('llm-pause-graph');
+            if (pause) pause.checked = llm.prefs.pauseGraph !== false;
             const tools = llmEl('llm-tools');
             if (tools) {
                 const entry = llm.entry || llmFindEntry(llm.prefs.last);
@@ -36309,6 +36360,9 @@ self.onmessage = async (ev) => {
             llm.busy = true;
             llm.entry = entry;
             llm.served = 0;
+            // Loading is as GPU-hungry as generating: the weights are being
+            // uploaded and the context allocated.
+            llmSetGraphPaused(true);
             llmSetPhase('downloading', '');
             llmRenderModels();
 
@@ -36328,6 +36382,11 @@ self.onmessage = async (ev) => {
                 await wllama.loadModelFromUrl(llmModelUrl(entry), {
                     n_ctx: llm.prefs.nCtx,
                     n_gpu_layers: useGpu ? 999 : 0,
+                    // Leave the machine something to draw with. wllama
+                    // defaults to every core, which on a CPU-backed run means
+                    // the renderer, the compositor and this page's own
+                    // JavaScript are all fighting the model for a thread.
+                    n_threads: llmThreadBudget(),
                     // Keep `<think>` in the text we stream so this file can
                     // fold it away itself; the default parser routes it to a
                     // field the stream does not carry.
@@ -36359,6 +36418,7 @@ self.onmessage = async (ev) => {
                 llmSetPhase('error', llmReadableError(err));
             } finally {
                 llm.busy = false;
+                llmSetGraphPaused(false);
                 llmRenderModels();
                 llmRefreshCache();
             }
@@ -36549,6 +36609,7 @@ self.onmessage = async (ev) => {
                 return;
             }
 
+            llmSetGraphPaused(true);
             const req = job.request || {};
             const wantsTools = Array.isArray(req.tools) && req.tools.length > 0;
             const ctrl = new AbortController();
@@ -36628,8 +36689,38 @@ self.onmessage = async (ev) => {
             } finally {
                 llm.cancelled.delete(job.id);
                 llm.running = null;
+                llmSetGraphPaused(false);
                 llmSetPhase(llm.attached ? 'live' : 'off');
             }
+        }
+
+        /// Freeze the graph while the model works.
+        ///
+        /// Inference and the renderer want the same GPU: generating with the
+        /// canvas live took the page from 120 fps to about 6, with the GPU
+        /// pinned near 100%. The graph is not what anyone is looking at while
+        /// an answer streams, so it stops — and gets the GPU back, which
+        /// makes the answer faster too. Off switch under Advanced, for anyone
+        /// watching a layout settle while they ask about it.
+        ///
+        /// Counted rather than toggled: a queued job must not un-pause the
+        /// one still running.
+        function llmSetGraphPaused(on) {
+            llm.pauseDepth = Math.max(0, (llm.pauseDepth || 0) + (on ? 1 : -1));
+            llmApplyGraphPause();
+        }
+
+        /// Reconcile the renderer with the depth *and* the preference.
+        ///
+        /// Split from the counter because the preference can change while a
+        /// job is running: an early return on the way out would have left the
+        /// graph frozen for good the moment someone unticked the box.
+        function llmApplyGraphPause() {
+            const want = llm.prefs.pauseGraph !== false && (llm.pauseDepth || 0) > 0;
+            if (want === llm.graphPaused) return;
+            llm.graphPaused = want;
+            if (typeof renderSetPaused === 'function') renderSetPaused(want);
+            document.body.classList.toggle('llm-graph-paused', want);
         }
 
         function llmPost(url, body) {
@@ -36750,10 +36841,13 @@ self.onmessage = async (ev) => {
                     llmRender();
                 }
             });
-            for (const [id, key] of [['llm-gpu', 'gpu'], ['llm-think', 'think'], ['llm-auto', 'auto']]) {
+            for (const [id, key] of [['llm-gpu', 'gpu'], ['llm-think', 'think'], ['llm-auto', 'auto'], ['llm-pause-graph', 'pauseGraph']]) {
                 llmEl(id).addEventListener('change', (e) => {
                     llm.prefs[key] = e.target.checked;
                     llmSavePrefs();
+                    // Unticking mid-answer has to give the graph back now,
+                    // not after the next one.
+                    if (key === 'pauseGraph') llmApplyGraphPause();
                 });
             }
 
