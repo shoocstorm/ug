@@ -49,7 +49,9 @@ else
 fi
 
 info "Looking up $VERSION release for $asset..."
-download_url=$(curl -fsSL "$release_url" | grep '"browser_download_url"' | grep "$archive" | sed -E 's/.*"(https:[^"]+)".*/\1/')
+# Match the closing quote so the .tar.gz.sha256 checksum asset is not picked up too
+# (two URLs would leave curl with a malformed multi-line argument).
+download_url=$(curl -fsSL "$release_url" | grep '"browser_download_url"' | grep -F "$archive\"" | head -n 1 | sed -E 's/.*"(https:[^"]+)".*/\1/')
 
 [ -n "$download_url" ] || die "no $archive asset found for $VERSION release of $REPO — has a release been published yet?"
 
