@@ -158,6 +158,7 @@ pub(crate) fn print_help() {
 
     group("Manage projects", "");
     cmd("list", "Projects under ~/.ug: nodes, size on disk, how stale each one is");
+    cmd("files", "A project's indexed files — filter by wildcard, ext, kind or status");
     cmd("active", "The project commands default to when run outside an indexed repo");
     cmd("rename", "Rename a project (aliases: rn, mv)");
     cmd("remove", "Delete a project's data directory");

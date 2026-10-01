@@ -2105,7 +2105,7 @@ fn every_advertised_tool_carries_a_summary_and_an_example() {
     // `ug api` and GET /api/tools publish both. A tool added to the table
     // without either shows up in discovery as a blank row, which reads as a
     // broken endpoint rather than a missing doc string.
-    for (name, summary) in AGENT_TOOLS.iter().chain(STORE_BACKED_AGENT_TOOLS.iter()) {
+    for (name, summary) in AGENT_TOOLS.iter().chain(STORE_BACKED_AGENT_TOOLS.iter()).chain(PROJECT_AGENT_TOOLS.iter()) {
         assert!(!summary.is_empty(), "{name} has no summary");
         let example = tool_example(name);
         assert!(
@@ -2130,6 +2130,9 @@ fn only_graph_backed_tools_claim_run_tool_can_answer_them() {
             !is_agent_tool(name),
             "{name} needs the store, so run_tool cannot answer it"
         );
+    }
+    for (name, _) in PROJECT_AGENT_TOOLS {
+        assert!(!is_agent_tool(name), "{name} reads no graph.json, so run_tool cannot answer it");
     }
     assert!(!is_agent_tool("not_a_tool"));
     assert_eq!(tool_summary("not_a_tool"), "", "an unknown tool has no summary");

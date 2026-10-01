@@ -26,6 +26,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "walk",
     "analyze",
     "graph_schema",
+    "files",
     "list_projects",
     "gen",
 ];
@@ -52,7 +53,12 @@ pub fn is_known_tool(canonical: &str) -> bool {
     TOOL_NAMES.contains(&canonical) || is_unlisted_tool(canonical) || is_alias_tool(canonical)
 }
 
-pub const CHAT_TOOL_DENYLIST: &[&str] = &["gen", "list_projects"];
+/// Not offered to the chat and tour models. `gen` and `list_projects` act
+/// across or on the index; `files` is a directory listing whose answer the UI
+/// already shows beside the chat, and a model reaching for it is browsing
+/// rather than answering — `search`, `find_symbols` and `file_context` are
+/// the tools for "where is X".
+pub const CHAT_TOOL_DENYLIST: &[&str] = &["gen", "list_projects", "files"];
 
 /// Tools the chat and tour dispatchers answer from the open store, in their
 /// own match arms. Everything else advertised falls through to
@@ -501,6 +507,26 @@ fn raw_tools() -> Value {
             "name": "graph_schema",
             "description": "The capability manifest for this project's graph, and the one call to make before any filtered or statistical query. Returns: node & edge types actually present, with counts and what each edge type connects (e.g. Calls: Function→Function); the full edge-type vocabulary indexers can emit; the properties analyze can filter and aggregate on, each with how many nodes actually carry it; and every available analyze preset. Filtering on a type the graph doesn't contain, or aggregating over a property nothing carries, returns a confident zero rather than an error — this call is how you avoid both. Edges are directed (Calls A→B means A calls B); Contains is pure structure (Folder→File→Symbol), exclude it when you mean 'depends on'.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "files",
+            "description": format!(
+                "THE FILES THIS PROJECT'S INDEX HOLDS, and whether each is current. One row per indexed file: language, code or docs, size, last modified, and status against the index — fresh, changed since the last `gen` (refresh before trusting structural answers about it), or missing. Use it to answer 'what is indexed', 'is X in the index', 'which files changed since indexing', 'what are the biggest docs', or to pick exact paths for file_context / get_code. Filters all must hold; several patterns are alternatives. A pattern without '/' also matches the file name ('*.md' finds docs/a.md); with '/' it matches the path ('src/**/*.ts'). Wildcards: {wildcards}. Pages like analyze: 50 rows by default, the output states which rows it shows and the range to ask for next. Read-only and cheap: one stat per file, no embedder, no store.",
+                wildcards = WILDCARD_SYNTAX
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "pattern": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 20 } ], "description": "Wildcard on the file's path (or its name, when the pattern has no '/'). An array is a set of alternatives, e.g. [\"*.ts\", \"*.tsx\"]." },
+                    "ext": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" } } ], "description": "Extension(s), with or without the dot: \"md\", \"ts,tsx\" or [\"ts\", \"tsx\"]." },
+                    "lang": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" } } ], "description": "Indexer language: typescript, python, java, rust, markdown, pdf." },
+                    "kind": { "type": "string", "enum": ["code", "docs"], "description": "code, or docs (Markdown and PDF)." },
+                    "status": { "oneOf": [ { "type": "string", "enum": ["fresh", "changed", "missing"] }, { "type": "array", "items": { "type": "string", "enum": ["fresh", "changed", "missing"] } } ], "description": "Only files in this state against the index. [\"changed\", \"missing\"] is exactly what a gen would refresh." },
+                    "sort": { "type": "string", "enum": ["path", "size", "modified"], "description": "path (default), size (largest first) or modified (newest first)." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "How many rows to show (default 50). Shorthand for range \"1-N\"." },
+                    "range": { "type": "string", "description": "Which window of rows to show, 1-based and inclusive: \"20\", \"51-100\", \"34-end\". Page with this rather than raising limit and re-reading rows you have seen." }
+                }
+            }
         },
         {
             "name": "list_projects",

@@ -140,6 +140,7 @@ stdout.
 | `ug app` | — | Open the native desktop shell (starts the server + a window). | Same as `ug serve` |
 | `ug api` | — | List every HTTP endpoint `ug serve` exposes. | `--json` |
 | `ug list` | `ls`, `list_projects` | List generated projects under `~/.ug`: node/edge counts, size on disk, `STATUS` (`fresh` · `N changed` · `no db` · `repo gone` · `no graph`), last-updated time and repo root, plus per-project follow-ups naming the command that resolves each one. `STATUS` reports whatever blocks you soonest, from the same scan as `GET /api/projects/staleness`. | `--quick` (skip the size walk and staleness scan), `--json` |
+| `ug files [<pattern>...]` | — | A project's indexed files, one row each: language, `code`/`docs`, size, last modified and status against the index (`fresh` · `changed` · `missing`, the same per-file check `ug list` counts with). One `stat` per file, no graph parse. A pattern without `/` also matches the file name (`'*.ts'`, `'*{fare,refund}*'`); several are alternatives. The table pages like `ug analyze` (default 50 rows, a runnable `next:` line); `--json` returns every match unless `-k`/`--range` is given, as `{project, repoRoot, builtAt, repoMissing, indexed, total, from, to, counts:{fresh,changed,missing}, files:[{path, ext, language, kind, bytes, modified, status}]}`, with `counts` over all matches. | `-g/--glob <p>` (repeatable), `-e/--ext <ext>` (repeatable or comma-separated), `--lang <name>`, `--kind code\|docs`, `--status fresh\|changed\|missing`, `--sort path\|size\|modified`, `-k/--limit <n>`, `-r/--range <window>`, `--json`, `-o <file>`, `-n <project>` |
 | `ug active` | — | View or set the active project (default for `ug mcp`). | Sets with `<name>` positional |
 | `ug rename` | `rn`, `mv` | Rename a project's data directory and its `project.json` name; the active marker follows it. One positional renames the current (active, else cwd) project; two rename `<old> <new>`. | `<new>` or `<old> <new>` positionals, `-n <old>` |
 | `ug remove` | — | Delete a project's data directory. | `<name>` positional |
@@ -360,6 +361,7 @@ which case the page uses its built-ins:
 | GET | `/api/presets` | Preset registry **plus** `properties` — the queryable property vocabulary, so the UI and the MCP capability manifest read the same list rather than each hardcoding one (name, category, description, params, source) | Preset registry |
 | POST | `/api/tools/:tool` | Run one agent tool (same params as MCP). Accepts body JSON with optional `project` field. | graph.json |
 | POST | `/api/tools/analyze` | Run a statistical query. Body: `{preset, args, gql, limit, range}`. Accepts the optional `project` field like every other tool, resolves its store the same way, and applies the MCP-side arg normalization (stringified numbers/booleans coerced, paging `limit`/`range` lifted out of `args`, JSON-array `args` like `{"files": ["a.ts","b.rs"]}` joined to comma form). Returns `columns` plus **only the requested window** of `rows`, with `from`/`to`/`rowsTotal` to page by, `rowsMatched`, `coverage`, `unindexed`, `warnings`, `truncated` and a rendered `text`. | ugdb (no embedder) |
+| POST | `/api/tools/files` | The project's indexed files. Body: `{pattern, ext, lang, kind, status, sort, limit, range}` (`pattern`/`ext`/`lang`/`status` take a string or an array). Same query and envelope as `ug files --json` — every match unless `limit`/`range` asks for a window, with `counts` over all matches; `"render": "markdown"` returns the paged table as `{text}`. 400 for a value it cannot read, 404 for a project never generated. | `project.json` + one `stat` per file (no db, no embedder) |
 
 ### 2.7 File Content
 
@@ -422,7 +424,7 @@ Three things this API does deliberately:
 
 ### 3.1 Advertised MCP Tools (`tools/list`)
 
-These 14 tools are advertised over MCP `tools/list` and also available via the CLI and HTTP `/api/tools/:tool`. Each tool accepts an optional `project` parameter (except `list_projects`).
+These 15 tools are advertised over MCP `tools/list` and also available via the CLI and HTTP `/api/tools/:tool`. Each tool accepts an optional `project` parameter (except `list_projects`).
 
 | Tool | What it does | Data source | When it errors |
 |------|-------------|-------------|----------------|
@@ -438,6 +440,7 @@ These 14 tools are advertised over MCP `tools/list` and also available via the C
 | `walk` | **What did this change touch?** Maps a git diff onto the graph — the innermost enclosing symbol per hunk, not just the file list — ordered by the call graph so callers come before the code they call, then the unchanged callers and tests they reach. Every stop is labelled `changed` / `caller` / `test`; the last two are code the diff did **not** edit. Takes `spec` (omitted = uncommitted, or `staged`, a commit-ish, or a range), `max_stops`, `expand`. One hop out by design — `analyze diff_impact` is the full reachable set. | graph.json + **git** (no db, no embedder) | git missing, not a working tree, or an unknown revision |
 | `analyze` | **Whole-repo statistics**: counts, groups, distributions, blast radius. Takes a named `preset` or raw GQL. Read-only — mutations are rejected before write staging. Every answer reports property coverage, because aggregating over an unstored property returns `0` rather than an error. | ugdb (**no embedder**) | db missing or written by an older ug |
 | `graph_schema` | **Capability manifest**: node & edge types with counts and connection shapes (from graph.json), plus queryable properties with live coverage and the `analyze` preset list (from the db). | graph.json + ugdb | graph.json missing/invalid (the db half degrades to a note) |
+| `files` | **The files this project's index holds**: language, code/docs, size, modified, and `fresh`/`changed`/`missing` against the index. Filters `pattern` (wildcards; no `/` also matches the file name), `ext`, `lang`, `kind`, `status`; `sort` by path, size or modified. Pages like `analyze` (`limit`, `range`, default 50 rows) and names the next window. | `project.json` + one `stat` per file | project never generated |
 | `list_projects` | List every indexed project on this machine (name, repo path, graph size). | `~/.ug/` directory scan | — |
 | `gen` | Re-run index → graph → embed pipeline for the current (or named) project, from its recorded repo root. Incremental (content-hash cache). Graph tools refresh even if embedding fails. | Repo source → index.json → graph.json → ugdb/Neo4j | Repo root missing |
 
@@ -449,7 +452,7 @@ These 14 tools are advertised over MCP `tools/list` and also available via the C
 
 ### 3.4 Chat Tool Denylist
 
-`gen` and `list_projects` are excluded from the OpenAI-compatible tool schemas used by `ug chat` — the LLM should not be able to reindex or list projects mid-conversation.
+`gen`, `list_projects` and `files` are excluded from the OpenAI-compatible tool schemas used by `ug chat` — the LLM should not be able to reindex or list projects mid-conversation, and a directory listing is browsing rather than answering (`search`, `find_symbols` and `file_context` answer "where is X").
 
 ### 3.5 OpenAI-compatible Tool Schemas
 

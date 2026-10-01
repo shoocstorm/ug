@@ -22,6 +22,7 @@ pub(crate) mod connect;
 pub(crate) mod demo;
 pub(crate) mod doctor;
 pub(crate) mod embed;
+pub(crate) mod files;
 pub(crate) mod gen;
 pub(crate) mod help;
 pub(crate) mod hook;
@@ -172,6 +173,7 @@ fn dispatch(cmd: &str, cmd_args: &[String]) {
         // tool's name, and the agent-tool commands are documented as taking
         // the same names as the tools.
         "list" | "ls" | "list_projects" => { projects::run_list(cmd_args); Ok(()) },
+        "files" => files::run_files(cmd_args),
         "active" => { projects::run_active(cmd_args); Ok(()) },
         "rename" | "rn" | "mv" => { projects::run_rename(cmd_args); Ok(()) },
         "remove" => { projects::run_remove(cmd_args); Ok(()) },

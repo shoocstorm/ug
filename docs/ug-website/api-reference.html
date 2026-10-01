@@ -540,6 +540,7 @@ function:native/src/cli/gen.rs:run_gen                                   <span c
       <tr><td><code>ug app</code></td><td>Open the native desktop shell (starts server + window).</td><td>Same as <code>ug serve</code></td></tr>
       <tr><td><code>ug api</code></td><td>List every HTTP endpoint <code>ug serve</code> exposes.</td><td><code>--json</code></td></tr>
       <tr><td><code>ug list</code></td><td>List generated projects under <code>~/.ug</code>: node/edge counts, size on disk, <code>STATUS</code> (<code>fresh</code> · <code>N changed</code> · <code>no db</code> · <code>repo gone</code> · <code>no graph</code>), last-updated time and repo root, plus per-project follow-ups naming the command that fixes each one. <code>STATUS</code> shows whatever blocks you soonest, from the same scan as <code>/api/projects/staleness</code>. Aliases: <code>ls</code>, <code>list_projects</code>.</td><td><code>--quick</code> <code>--json</code></td></tr>
+      <tr><td><code>ug files [&lt;pattern&gt;...]</code></td><td>A project's indexed files, one row each: language, <code>code</code>/<code>docs</code>, size, last modified and status against the index (<code>fresh</code> · <code>changed</code> · <code>missing</code>, the same per-file check <code>ug list</code> counts with). A pattern without <code>/</code> also matches the file name (<code>'*.ts'</code>, <code>'*{fare,refund}*'</code>). The table pages like <code>ug analyze</code> (default 50 rows, a runnable <code>next:</code> line); <code>--json</code> returns every match unless <code>-k</code>/<code>--range</code> is given, with per-status <code>counts</code> over all matches.</td><td><code>-g/--glob</code> <code>-e/--ext</code> <code>--lang</code> <code>--kind code|docs</code> <code>--status fresh|changed|missing</code> <code>--sort path|size|modified</code> <code>-k/--limit</code> <code>-r/--range</code> <code>--json</code> <code>-o</code> <code>-n</code></td></tr>
       <tr><td><code>ug active</code></td><td>View or set the active project.</td><td><code>&lt;name&gt;</code></td></tr>
       <tr><td><code>ug rename</code></td><td>Rename a project's data directory and its <code>project.json</code> name; the active marker follows it. One positional renames the current (active, else cwd) project; two rename <code>&lt;old&gt; &lt;new&gt;</code>. Aliases: <code>rn</code>, <code>mv</code>.</td><td><code>&lt;new&gt;</code> or <code>&lt;old&gt; &lt;new&gt;</code> <code>-n &lt;old&gt;</code></td></tr>
       <tr><td><code>ug remove</code></td><td>Delete a project's data directory.</td><td><code>&lt;name&gt;</code></td></tr>
@@ -694,6 +695,7 @@ function:native/src/cli/gen.rs:run_gen                                   <span c
       <tr><td><code>GET</code></td><td><code>/api/presets</code></td><td>The <code>analyze</code> preset catalog (name, category, description) plus the queryable property vocabulary</td></tr>
       <tr><td><code>POST</code></td><td><code>/api/tools/:tool</code></td><td>Run one agent tool (same params as MCP — including wildcards)</td></tr>
       <tr><td><code>POST</code></td><td><code>/api/tools/analyze</code></td><td>Run a statistical query <code>{"preset"|"gql", "args", "limit", "range"}</code>, store-backed (503 without a db). Accepts <code>project</code> like every tool; returns rows over <code>columns</code> for the requested window, plus <code>coverage</code>/<code>warnings</code> and a rendered <code>text</code></td></tr>
+      <tr><td><code>POST</code></td><td><code>/api/tools/files</code></td><td>The project's indexed files <code>{"pattern", "ext", "lang", "kind", "status", "sort", "limit", "range"}</code> — same envelope as <code>ug files --json</code>: every match unless a window is asked for, with per-status <code>counts</code>; <code>"render": "markdown"</code> returns the paged table. No db needed</td></tr>
     </table>
   </div>
 
@@ -774,13 +776,14 @@ function:native/src/cli/gen.rs:run_gen                                   <span c
       <tr><td><code>shortest_path</code></td><td>Find shortest directed edge path between two symbols. Each endpoint must resolve to exactly one node.</td><td>graph.json</td></tr>
       <tr><td><code>analyze</code></td><td><strong>Whole-repo statistics</strong> — counts, groups, distributions, blast radius, in one call. Named preset or raw GQL.</td><td>ugdb (no embedder)</td></tr>
       <tr><td><code>graph_schema</code></td><td>Node &amp; edge types present, with counts and connection shapes.</td><td>graph.json</td></tr>
+      <tr><td><code>files</code></td><td><strong>The files this project's index holds</strong> — language, code/docs, size, modified, fresh/changed/missing. Filter by wildcard <code>pattern</code>, <code>ext</code>, <code>lang</code>, <code>kind</code>, <code>status</code>; pages like <code>analyze</code>.</td><td><code>project.json</code> + stat</td></tr>
       <tr><td><code>list_projects</code></td><td>List every indexed project on this machine.</td><td><code>~/.ug/</code> scan</td></tr>
       <tr><td><code>gen</code></td><td>Re-run index → graph → embed pipeline for the current (or named) project, from its recorded repo root. Incremental.</td><td>Repo source</td></tr>
     </table>
   </div>
 
   <h2>3.2 Chat Tool Denylist</h2>
-  <p><code>gen</code> and <code>list_projects</code> are excluded from OpenAI-compatible tool schemas — the LLM should not regenerate the index or list projects mid-conversation.</p>
+  <p><code>gen</code>, <code>list_projects</code> and <code>files</code> are excluded from OpenAI-compatible tool schemas — the LLM should not regenerate the index or list projects mid-conversation, and a directory listing is browsing rather than answering.</p>
 
   <div class="code-block">
     <div class="titlebar"><span class="label">mcp · call a tool</span><button class="copy-btn" data-copy='ug mcp call find_symbols "{&quot;name&quot;:&quot;run_serve&quot;}"'>Copy</button></div>

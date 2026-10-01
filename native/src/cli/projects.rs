@@ -287,7 +287,7 @@ fn size_cell(size: Option<u64>) -> String {
 
 /// Bytes at human scale. Three significant figures below 10 units, so a
 /// column of sizes stays comparable at a glance.
-fn format_bytes(bytes: u64) -> String {
+pub(crate) fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes as f64;
     let mut unit = 0;

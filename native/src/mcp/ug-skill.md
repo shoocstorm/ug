@@ -207,6 +207,7 @@ approximate.
 | How does a vague concept work? | `ug search "concept" -k 8` |
 | What's in this file, and what surrounds it? | `ug file_context path/f.rs` |
 | What's in this subtree? | `ug file_context 'src/**/*.ts'` (outlines only) |
+| Which files are indexed, and which changed since? | `ug files` · `ug files 'src/**' --ext ts` · `ug files --status changed,missing` |
 | Read the source | `ug get_code <symbol>` · `ug get_code -f file --range 10-60` |
 | Who calls / imports / implements this? | `ug find_usages <symbol>` |
 | What does this depend on? | `ug traverse <symbol> -k 1` (widen only if needed) |

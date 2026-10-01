@@ -69,6 +69,7 @@ pub(crate) const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
             ApiEntry { method: "POST", path: "/api/tools/traverse", desc: "N-hop walk from seed symbols, filtered by edge type and direction", availability: "always (empty if no project active)", cli_equivalent: Some("ug traverse --json") },
             ApiEntry { method: "POST", path: "/api/tools/shortest_path", desc: "shortest directed edge path between two symbols", availability: "always (empty if no project active)", cli_equivalent: Some("ug shortest_path --json") },
             ApiEntry { method: "POST", path: "/api/tools/graph_schema", desc: "node & edge types present, with counts", availability: "always (empty if no project active)", cli_equivalent: Some("ug graph_schema --json") },
+            ApiEntry { method: "POST", path: "/api/tools/files", desc: "the project's indexed files with language, size, modified and fresh/changed/missing — filter by pattern, ext, lang, kind, status; every match unless limit/range is given", availability: "always (404 if the project was never generated)", cli_equivalent: Some("ug files --json") },
             ApiEntry { method: "POST", path: "/api/tools/analyze", desc: "run a GQL (Cypher-like) query or built-in preset against the OverGraph store", availability: "503 if no DB backend configured", cli_equivalent: Some("ug analyze") },
         ],
     ),
@@ -106,7 +107,7 @@ pub(crate) const API_ENDPOINTS: &[(&str, &[ApiEntry])] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_tools::{AGENT_TOOLS, STORE_BACKED_AGENT_TOOLS};
+    use crate::agent_tools::{AGENT_TOOLS, PROJECT_AGENT_TOOLS, STORE_BACKED_AGENT_TOOLS};
 
     /// Every dispatchable agent tool must appear in the catalogue.
     ///
@@ -122,7 +123,7 @@ mod tests {
             .flat_map(|(_, entries)| entries.iter())
             .filter_map(|e| e.path.strip_prefix("/api/tools/"))
             .collect();
-        for (tool, _) in AGENT_TOOLS.iter().chain(STORE_BACKED_AGENT_TOOLS) {
+        for (tool, _) in AGENT_TOOLS.iter().chain(STORE_BACKED_AGENT_TOOLS).chain(PROJECT_AGENT_TOOLS) {
             assert!(
                 listed.contains(tool),
                 "agent tool `{tool}` is dispatchable at POST /api/tools/{tool} \
@@ -138,6 +139,7 @@ mod tests {
         let known: Vec<&str> = AGENT_TOOLS
             .iter()
             .chain(STORE_BACKED_AGENT_TOOLS)
+            .chain(PROJECT_AGENT_TOOLS)
             .map(|(t, _)| *t)
             .collect();
         for path in API_ENDPOINTS

@@ -743,6 +743,42 @@ async fn tools_discovery_advertises_analyze() {
     );
 }
 
+/// `files` answers from project.json and the tree on disk, so it works under
+/// `--no-db` — with the same envelope and filters as `ug files --json`, the
+/// table an MCP client gets under `"render": "markdown"`, and a 400 for a
+/// value it cannot read rather than an empty list that looks like an answer.
+#[tokio::test]
+async fn files_route_lists_the_indexed_files_without_a_db() {
+    let _guard = ENV_GUARD.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let app = router_for(&tmp, "demo", &sample_graph()).await;
+
+    let (status, body) = post(&app, "/api/tools/files", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["project"], "demo");
+    let paths: Vec<&str> = v["files"].as_array().unwrap().iter().filter_map(|f| f["path"].as_str()).collect();
+    assert!(paths.contains(&"src/a.rs"), "{body}");
+    let a = v["files"].as_array().unwrap().iter().find(|f| f["path"] == "src/a.rs").unwrap();
+    assert_eq!((a["language"].as_str(), a["kind"].as_str()), (Some("rust"), Some("code")), "{body}");
+    assert_eq!(v["total"], v["indexed"], "no filter: every file");
+
+    let (_, body) = post(&app, "/api/tools/files", serde_json::json!({"pattern": "*.md"})).await;
+    let none: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(none["total"], 0, "{body}");
+
+    let (status, body) = post(&app, "/api/tools/files", serde_json::json!({"status": "stale"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (status, body) = post(&app, "/api/tools/files", serde_json::json!({"render": "markdown"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let text: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(text["text"].as_str().unwrap().contains("src/a.rs"), "{body}");
+
+    let (_, body) = get(&app, "/api/tools").await;
+    assert!(body.contains("/api/tools/files"), "files is advertised: {body}");
+}
+
 /// `analyze` is store-backed: the `POST /api/tools/analyze` route dispatches it
 /// but it needs the indexed database, so under `--no-db` it must 503 (not fall
 /// over) — and it scopes by `project` like every other tool.

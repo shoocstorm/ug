@@ -159,6 +159,18 @@ struct ProjectCtx {
     graph_path: PathBuf,
 }
 
+/// The `files` tool: [`crate::files`], rendered as the table an agent reads,
+/// with the next page named in this tool's own terms.
+fn tool_files(ctx: &ProjectCtx, args: &Value) -> Result<String, String> {
+    let dir = ctx.graph_path.parent().ok_or("this project has no data directory")?;
+    let (dir, meta) = crate::files::project_at(dir)?;
+    let query = crate::files::FileQuery::from_json(args)?;
+    let answer = crate::files::run(&dir, &meta, &query, true);
+    Ok(crate::files::render(&answer, false, &|from, to| {
+        format!("call files again with \"range\": \"{from}-{to}\" (keep the other arguments)")
+    }))
+}
+
 /// Warning appended to the vector-backed tools when the project has nodes
 /// that were written without vectors (any run without `--with-embed`, which
 /// is the default and what the git hooks do).
@@ -891,6 +903,10 @@ impl Mcp {
                     None => text,
                 })
             }
+            // Reads project.json and stats the tree — no graph, no store — so
+            // it answers on a project that was never ingested too. Staleness
+            // is its subject, so no staleness note on top.
+            "files" => tool_files(&ctx, &args),
             "gen" => self.tool_gen(&ctx, &args).await,
             "ping_embedder" => {
                 self.embedder()?.ping().await.map_err(|e| e.to_string())?;
@@ -2309,6 +2325,22 @@ mod tool_dispatch_tests {
             .await
             .expect("the project key is stripped before the tool sees it");
         assert!(out.contains("caller"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn files_lists_the_indexed_files_as_a_paged_table() {
+        let mut env = crate::project::EnvGuard::new_async().await;
+        let _guard = project(&mut env, "p");
+        let out = call("files", json!({ "project": "p" })).await.expect("files");
+        assert!(out.contains("src/a.rs") && out.contains("fresh"), "{out}");
+        assert!(out.contains("files 1–1 of 1"), "{out}");
+        assert!(!out.contains('\x1b'), "an agent reads plain text: {out}");
+        let none = call("files", json!({ "project": "p", "pattern": ["*.md", "*.py"] })).await.expect("files");
+        assert!(none.contains("No files match"), "{none}");
+        let err = call("files", json!({ "project": "p", "kind": "binary" })).await.unwrap_err();
+        assert!(err.contains("kind"), "{err}");
+        // Not offered to the chat model: a directory listing is browsing, not answering.
+        assert!(!tools::openai_tool_schemas().iter().any(|t| t["function"]["name"] == "files"));
     }
 
     #[tokio::test]

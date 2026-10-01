@@ -39,6 +39,7 @@ mod chat;
 mod chat_eval;
 pub mod cli;
 mod config;
+mod files;
 pub mod git;
 mod mcp;
 mod project;

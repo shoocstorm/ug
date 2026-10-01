@@ -779,6 +779,15 @@ pub const STORE_BACKED_AGENT_TOOLS: &[(&str, &str)] = &[(
     "Whole-repo statistics, distributions and blast radius — a named preset or a raw GQL query over the indexed store.",
 )];
 
+/// Tools `POST /api/tools/:tool` dispatches from the project's metadata and
+/// the files on disk — neither graph.json (so not [`run_tool`]) nor the store
+/// (so not [`STORE_BACKED_AGENT_TOOLS`], whose discovery note promises a 503
+/// without a database that these never return).
+pub const PROJECT_AGENT_TOOLS: &[(&str, &str)] = &[(
+    "files",
+    "The files the project's index holds — language, size, modified, fresh/changed/missing — filtered by wildcard, extension, kind or status.",
+)];
+
 /// Does `run_tool` answer this name?
 pub fn is_agent_tool(tool: &str) -> bool {
     AGENT_TOOLS.iter().any(|(name, _)| *name == tool)
@@ -802,6 +811,7 @@ pub fn tool_example(tool: &str) -> &'static str {
         "shortest_path" => r#"{"source": "run_gen", "target": "run_ingest"}"#,
         "graph_schema" => r#"{}"#,
         "analyze" => r#"{"preset": "long_functions", "args": {"min_loc": 100}}"#,
+        "files" => r#"{"pattern": "src/**/*.ts", "status": ["changed", "missing"], "range": "1-50"}"#,
         _ => "{}",
     }
 }
@@ -811,6 +821,7 @@ pub fn tool_summary(tool: &str) -> &'static str {
     AGENT_TOOLS
         .iter()
         .chain(STORE_BACKED_AGENT_TOOLS.iter())
+        .chain(PROJECT_AGENT_TOOLS.iter())
         .find(|(name, _)| *name == tool)
         .map(|(_, summary)| *summary)
         .unwrap_or("")

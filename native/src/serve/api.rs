@@ -28,6 +28,7 @@ pub(crate) async fn api_tools() -> Response {
     let tools: Vec<serde_json::Value> = ultragraph::agent_tools::AGENT_TOOLS
         .iter()
         .chain(ultragraph::agent_tools::STORE_BACKED_AGENT_TOOLS.iter())
+        .chain(ultragraph::agent_tools::PROJECT_AGENT_TOOLS.iter())
         .map(|(name, summary)| {
             let mut entry = serde_json::json!({
                 "name": name,
@@ -272,6 +273,14 @@ pub(crate) async fn api_tool(
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e),
     };
 
+    // `files` reads the project's metadata and stats its tree: no graph, no
+    // store. Same query and envelope as `ug files --json` and the MCP tool.
+    if tool == "files" {
+        let mut args = serde_json::Value::Object(params);
+        crate::mcp::tools::normalize_args(&tool, &mut args);
+        return api_files(&ctx, &args, style.is_some());
+    }
+
     // `analyze` is store-backed, so it never reaches `run_tool` — that
     // dispatcher only knows about graph.json. It still gets the same arg
     // coercion as the MCP and chat paths, and answers from the resolved
@@ -316,6 +325,31 @@ pub(crate) async fn api_tool(
         Err(e) if e.starts_with("Unknown agent tool") => err_json(StatusCode::NOT_FOUND, &e),
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e),
     }
+}
+
+/// `files` over HTTP: the JSON envelope (every match unless `limit`/`range`
+/// asks for a window), or with `"render": "markdown"` the table an MCP client
+/// reads, paged the same way.
+pub(crate) fn api_files(ctx: &ProjectContext, args: &serde_json::Value, rendered: bool) -> Response {
+    let Some(dir) = ctx.graph_path.parent() else {
+        return err_json(StatusCode::NOT_FOUND, "this project has no data directory");
+    };
+    let (dir, meta) = match crate::files::project_at(dir) {
+        Ok(p) => p,
+        Err(e) => return err_json(StatusCode::NOT_FOUND, &e),
+    };
+    let query = match crate::files::FileQuery::from_json(args) {
+        Ok(q) => q,
+        Err(e) => return err_json(StatusCode::BAD_REQUEST, &e),
+    };
+    let answer = crate::files::run(&dir, &meta, &query, rendered);
+    if rendered {
+        let text = crate::files::render(&answer, false, &|from, to| {
+            format!("POST /api/tools/files again with \"range\": \"{from}-{to}\"")
+        });
+        return ok_json(serde_json::json!({ "text": text }).to_string());
+    }
+    ok_json(crate::files::to_json(&answer).to_string())
 }
 
 // ---------- API helpers ----------

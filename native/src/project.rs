@@ -493,6 +493,85 @@ fn backfill_graph_index(dir: &Path, meta: &ProjectMeta) {
     }
 }
 
+/// The repo-relative paths of every file in a project's index, with its node
+/// composition (doc, code).
+///
+/// From `project.json`, recorded at `ug gen` time. Falling back to reading
+/// graph.json keeps projects generated before that field existed working —
+/// once each, after which the backfill has put them on the same stat-only path
+/// as everyone else. The composition counts are part of the test, not just the
+/// payload: a graph with no file-bearing nodes derives an empty list, which
+/// `skip_serializing_if` then declines to write, and reading `files` alone
+/// would send that project back through the parse on every call forever.
+pub(crate) fn indexed_file_list(project_dir: &Path, meta: &ProjectMeta) -> (Vec<String>, usize, usize) {
+    let derived_already = !meta.files.is_empty() || meta.doc_nodes > 0 || meta.code_nodes > 0;
+    if derived_already {
+        (meta.files.clone(), meta.doc_nodes, meta.code_nodes)
+    } else {
+        derive_graph_index(project_dir, &project_dir.join("graph.json"), meta)
+    }
+}
+
+/// When the index was built: `graph.json`'s mtime, the moment the index
+/// describes. Every "has this file changed since?" question compares to this.
+pub(crate) fn index_built_at(project_dir: &Path) -> Option<u64> {
+    std::fs::metadata(project_dir.join("graph.json")).ok().and_then(|m| {
+        m.modified()
+            .ok()
+            .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())
+    })
+}
+
+/// Where one indexed file stands against the index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileState {
+    /// On disk and unchanged since the index was built.
+    Fresh,
+    /// Edited after the index was built — `ug update` or `ug gen` picks it up.
+    Changed,
+    /// Deleted (or moved) since.
+    Missing,
+}
+
+impl FileState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            FileState::Fresh => "fresh",
+            FileState::Changed => "changed",
+            FileState::Missing => "missing",
+        }
+    }
+}
+
+/// One `stat` of an indexed file: its state, size and mtime (epoch seconds;
+/// both 0 when it is missing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileCheck {
+    pub state: FileState,
+    pub bytes: u64,
+    pub modified: u64,
+}
+
+/// The rule [`staleness`] counts with and `ug files` reports per file, so the
+/// two can never disagree: changed means modified after `built_at`.
+pub(crate) fn check_file(repo_root: &Path, file: &str, built_at: Option<u64>) -> FileCheck {
+    match std::fs::metadata(repo_root.join(file)) {
+        Ok(metadata) => {
+            let modified = metadata
+                .modified()
+                .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())
+                .unwrap_or(0);
+            let changed = matches!(built_at, Some(built) if metadata.modified().is_ok() && modified > built);
+            FileCheck {
+                state: if changed { FileState::Changed } else { FileState::Fresh },
+                bytes: metadata.len(),
+                modified,
+            }
+        }
+        Err(_) => FileCheck { state: FileState::Missing, bytes: 0, modified: 0 },
+    }
+}
+
 /// Stat the tree behind `meta` and report how far its index has drifted.
 /// `None` when the project holds no `graph.json` — there is no index to
 /// compare against.
@@ -502,11 +581,7 @@ pub(crate) fn staleness(project_dir: &Path, meta: &ProjectMeta) -> Option<Stalen
         return None;
     }
 
-    let built_at = std::fs::metadata(&graph_path).ok().and_then(|m| {
-        m.modified()
-            .ok()
-            .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())
-    });
+    let built_at = index_built_at(project_dir);
 
     // A vanished repo is settled before any file list is built. Nothing below
     // this point is stat-ed, and the list would contribute a count and
@@ -529,21 +604,7 @@ pub(crate) fn staleness(project_dir: &Path, meta: &ProjectMeta) -> Option<Stalen
         });
     }
 
-    // Prefer the file list recorded in project.json at `ug gen` time. Falling
-    // back to reading graph.json keeps projects generated before that field
-    // existed working — once each, after which the backfill has put them on
-    // the same stat-only path as everyone else.
-    //
-    // The composition counts are part of the test, not just the payload: a
-    // graph with no file-bearing nodes derives an empty list, which
-    // `skip_serializing_if` then declines to write, and reading `files` alone
-    // would send that project back through the parse on every poll forever.
-    let derived_already = !meta.files.is_empty() || meta.doc_nodes > 0 || meta.code_nodes > 0;
-    let (files, doc_nodes, code_nodes) = if derived_already {
-        (meta.files.clone(), meta.doc_nodes, meta.code_nodes)
-    } else {
-        derive_graph_index(project_dir, &graph_path, meta)
-    };
+    let (files, doc_nodes, code_nodes) = indexed_file_list(project_dir, meta);
 
     let mut changed = 0usize;
     let mut missing = 0usize;
@@ -553,22 +614,15 @@ pub(crate) fn staleness(project_dir: &Path, meta: &ProjectMeta) -> Option<Stalen
     let mut edited_sample: Vec<String> = Vec::new();
     let mut deleted_sample: Vec<String> = Vec::new();
     for file in &files {
-        match std::fs::metadata(repo_root.join(file)) {
-            Ok(metadata) => {
-                if let (Ok(modified), Some(built)) = (metadata.modified(), built_at) {
-                    let file_mtime = modified
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    if file_mtime > built {
-                        changed += 1;
-                        if edited_sample.len() < STALE_SAMPLE {
-                            edited_sample.push(file.clone());
-                        }
-                    }
+        match check_file(&repo_root, file, built_at).state {
+            FileState::Fresh => {}
+            FileState::Changed => {
+                changed += 1;
+                if edited_sample.len() < STALE_SAMPLE {
+                    edited_sample.push(file.clone());
                 }
             }
-            Err(_) => {
+            FileState::Missing => {
                 missing += 1;
                 if deleted_sample.len() < STALE_SAMPLE {
                     deleted_sample.push(format!("{} (deleted)", file));
