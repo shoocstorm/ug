@@ -114,6 +114,9 @@ jobs:
           "$hash  $archive" | Out-File -FilePath "$archive.sha256" -Encoding ascii -NoNewline
           Get-Content "$archive.sha256"
 
+      # Assets only. Every matrix job runs this step, and with release notes
+      # set here each one appended its own copy (v0.1.23 shipped GitHub's
+      # "Full Changelog" line three times); the `notes` job below sets them once.
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -121,5 +124,31 @@ jobs:
           files: |
             ultragraph-${{ matrix.asset_name }}.${{ matrix.archive }}
             ultragraph-${{ matrix.asset_name }}.${{ matrix.archive }}.sha256
-          generate_release_notes: true
           fail_on_unmatched_files: true
+
+  notes:
+    # After every platform build, so the release exists and the body is
+    # written once, by the same script release.sh previews with.
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history, for the tag before this one)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Set release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          {
+            scripts/release-notes.sh "$TAG"
+            if [ -n "$prev" ]; then
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${prev}...${TAG}"
+            fi
+          } > notes.md
+          cat notes.md
+          gh release edit "$TAG" --notes-file notes.md

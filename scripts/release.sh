@@ -82,32 +82,9 @@ git status --short || true
 echo
 
 # --- generate release notes (from git log — no file changes needed) -----------
-RELEASE_NOTES=""
-generate_release_notes() {
-  local prev_tag range
-  prev_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
-  range="${prev_tag:+${prev_tag}..HEAD}"
-  range="${range:-HEAD}"
-
-  RELEASE_NOTES="$(git log "$range" --oneline --no-decorate 2>/dev/null | awk '
-    BEGIN { f=""; b=""; r=""; o="" }
-    {
-      m = substr($0, index($0, " ") + 1)
-      if (m ~ /^release:/) { next }
-      sub(/^feat(\([^)]*\))?:[[:space:]]*/,  "", m); if (m != $0) { f = f "* " m "\n"; next }
-      sub(/^fix(\([^)]*\))?:[[:space:]]*/,   "", m); if (m != $0) { b = b "* " m "\n"; next }
-      sub(/^refactor(\([^)]*\))?:[[:space:]]*/,"",m); if (m != $0) { r = r "* " m "\n"; next }
-      sub(/^[a-z]+(\([^)]*\))?:[[:space:]]*/, "", m)
-      o = o "* " m "\n"
-    }
-    END {
-      if (f) print "### Features\n"  f
-      if (b) print "### Bug Fixes\n" b
-      if (r) print "### Refactors\n" r
-      if (o) print "### Other\n"     o
-    }')"
-}
-generate_release_notes
+# The same script the release workflow runs to publish them, so the preview
+# here is exactly what the GitHub Release will say.
+RELEASE_NOTES="$("$ROOT/scripts/release-notes.sh")"
 
 echo "Release notes:"
 if [[ -n "$RELEASE_NOTES" ]]; then
