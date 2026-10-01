@@ -91,7 +91,13 @@ use tree_sitter::Parser;
 /// `Symbol` starts being *populated*, not only when its shape changes.**
 /// `GRAPH_SCHEMA_VERSION` tells a reader what to trust; only this
 /// invalidates the cache that would otherwise keep serving the old value.
-const INDEXER_VERSION: &str = "8";
+///
+/// 9: `.tsx`, `.jsx` and `.js` are parsed with the TSX grammar. The plain
+/// TypeScript grammar has no JSX, so every component was one long error
+/// recovery: symbols inside JSX were missing or wrong, and on some files the
+/// parse never finished or overflowed the stack. Cached FileNodes for those
+/// files were built from that broken tree.
+const INDEXER_VERSION: &str = "9";
 
 /// Reserved key in `cache.json`. Prefixed and suffixed so it cannot collide
 /// with a repo-relative path.
@@ -141,7 +147,7 @@ fn process_file_content(
     let indexer = languages::for_extension(ext)?;
 
     let mut parser = Parser::new();
-    parser.set_language(indexer.tree_sitter_language()).ok()?;
+    parser.set_language(indexer.tree_sitter_language(ext)).ok()?;
     let tree = parser.parse(content.as_bytes(), None)?;
     let root = tree.root_node();
     let source = content.as_bytes();

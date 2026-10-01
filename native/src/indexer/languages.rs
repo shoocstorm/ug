@@ -54,8 +54,10 @@ pub trait LanguageIndexer: Send + Sync {
     /// File extensions (lower-case, no leading dot) handled by this indexer.
     fn extensions(&self) -> &'static [&'static str];
 
-    /// The tree-sitter grammar used to parse files of this language.
-    fn tree_sitter_language(&self) -> tree_sitter::Language;
+    /// The tree-sitter grammar used to parse a file with extension `ext`
+    /// (lower-case, no leading dot). One language can need more than one
+    /// grammar: TypeScript's has no JSX, so `.tsx` must use the TSX grammar.
+    fn tree_sitter_language(&self, ext: &str) -> tree_sitter::Language;
 
     /// Parse the file's top-level imports.
     fn extract_imports(&self, source: &[u8], root: Node) -> Vec<ImportInfo>;

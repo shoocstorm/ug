@@ -28,8 +28,18 @@ impl LanguageIndexer for TypeScriptIndexer {
         &["ts", "tsx", "js", "jsx"]
     }
 
-    fn tree_sitter_language(&self) -> tree_sitter::Language {
-        tree_sitter_typescript::language_typescript()
+    /// The TypeScript grammar has no JSX: it reads `<div>` as a type
+    /// assertion, and its error recovery on a component can run without end
+    /// or build a tree deep enough to overflow the stack of every recursive
+    /// walker below. TSX is a superset for JS, so only `.ts` — where
+    /// `<T>expr` assertions are legal and TSX would reject them — keeps the
+    /// plain grammar.
+    fn tree_sitter_language(&self, ext: &str) -> tree_sitter::Language {
+        if ext == "ts" {
+            tree_sitter_typescript::language_typescript()
+        } else {
+            tree_sitter_typescript::language_tsx()
+        }
     }
 
     fn extract_imports(&self, source: &[u8], _root: Node) -> Vec<ImportInfo> {
@@ -1378,10 +1388,37 @@ mod tests {
 
     #[test]
     fn one_grammar_serves_all_four_extensions() {
-        // The TS grammar is a superset of JS, which is why `.js` and `.jsx`
+        // The TS grammars are a superset of JS, which is why `.js` and `.jsx`
         // route here rather than to a parser of their own.
         assert_eq!(TypeScriptIndexer.name(), "typescript");
         assert_eq!(TypeScriptIndexer.extensions(), &["ts", "tsx", "js", "jsx"]);
+    }
+
+    #[test]
+    fn jsx_is_parsed_with_the_tsx_grammar_and_ts_keeps_type_assertions() {
+        // Parsed with the plain TypeScript grammar, a component like this one
+        // is error recovery from `<div>` onward — and on a real 270-line
+        // component the recovery never finished, or overflowed the stack.
+        let jsx = r#"function Row({ c }: { c: Verdict }) {
+  const Icon = c.ok ? Check : X;
+  return (
+    <li className={`row ${c.level}`}>
+      <Icon size={13} /> {c.text}
+      {c.ok && <span className="pill">ok</span>}
+    </li>
+  );
+}"#;
+        let assertion = "const n = <number>value;";
+        let has_error = |ext: &str, src: &str| {
+            let mut parser = tree_sitter::Parser::new();
+            parser.set_language(TypeScriptIndexer.tree_sitter_language(ext)).unwrap();
+            parser.parse(src, None).unwrap().root_node().has_error()
+        };
+        for ext in ["tsx", "jsx", "js"] {
+            assert!(!has_error(ext, jsx), ".{ext} must parse JSX cleanly");
+        }
+        // TSX rejects `<T>expr`; a `.ts` file may still use it.
+        assert!(!has_error("ts", assertion));
     }
 
     // ---- symbols ---------------------------------------------------------

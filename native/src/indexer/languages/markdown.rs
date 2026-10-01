@@ -54,7 +54,7 @@ impl LanguageIndexer for MarkdownIndexer {
         &["md", "mdx", "markdown"]
     }
 
-    fn tree_sitter_language(&self) -> tree_sitter::Language {
+    fn tree_sitter_language(&self, _ext: &str) -> tree_sitter::Language {
         tree_sitter_md::language()
     }
 

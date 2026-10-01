@@ -2631,6 +2631,30 @@ by the work done (CPU-ms per character), run each arm at least three times,
 and treat a single-sample delta as a hypothesis — §11i, again, on a different
 kind of measurement.
 
+### 11t. A grammar that does not cover the syntax fails as a hang, not an error
+
+`ug gen` on a React repo aborted with `thread '<unknown>' has overflowed its
+stack` (exit 134). The cause was one line: `TypeScriptIndexer` handed every
+`.ts`/`.tsx`/`.js`/`.jsx` file to `language_typescript()`, which has **no
+JSX** — it reads `<div>` as a type assertion. Tree-sitter never refuses
+input; it recovers. On a 273-line component that recovery either built an
+ERROR tree deep enough to overflow the recursive walkers, or — on a slice of
+the same file — ran at 100% CPU with RSS past 3 GB and never returned.
+Neither looks like "wrong grammar", and every smaller `.tsx` file had been
+indexing "fine" from a garbage tree the whole time.
+
+- **Map each extension to a grammar that actually covers it.** `.tsx`,
+  `.jsx` and `.js` now use `language_tsx()`; only `.ts` keeps the plain
+  grammar, because TSX rejects `<T>expr` assertions. The trait method takes
+  the extension for this reason.
+- **`root_node().has_error()` is the cheap check.** A grammar mismatch shows
+  up as an error on ordinary, valid source — assert it is false on a
+  realistic fixture per extension, as
+  `jsx_is_parsed_with_the_tsx_grammar_and_ts_keeps_type_assertions` does.
+- **To find the file, index each one alone** in parallel with its own
+  `UG_HOME`; the crash names a rayon worker, not a path, and `lldb` showed a
+  single frame from the overflowed stack.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
