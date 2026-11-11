@@ -393,7 +393,36 @@
             }
 
             #info {
-                width: 92vw;
+                /* Full-bleed: edges pinned to the viewport, `width` derived —
+                   not `right: 0` plus a vw width. A width form leaves the
+                   right edge's placement to the engine's viewport math, and
+                   iOS Safari placed it partly off-screen (the panel's right
+                   side sat outside the visible viewport). Insets of 0 clamp
+                   the box to exactly the viewport by construction. */
+                left: 0;
+                right: 0;
+                width: auto;
+                /* Above every piece of persistent chrome — the sidebar
+                   launcher (41), the resize handles and perf HUD (42) — so
+                   nothing pokes through the full-screen sheet. Still below
+                   the transient layers (tour/walk cards at 60, dialogs at
+                   200+, tooltips at 1000) that can open over it. */
+                z-index: 50;
+                /* Hiding is a slide past the right edge on desktop
+                   (05-info-panel.css). On a phone that off-screen box
+                   widens the *layout viewport* — measured:
+                   window.innerWidth grew 390 → 448 while the panel sat
+                   hidden — and the panel's own geometry then re-resolves
+                   against the widened viewport, pushing its right side
+                   off-screen. Hide in place instead; the slide is not
+                   worth the feedback loop on a screen this size. */
+                transform: none;
+                visibility: hidden;
+            }
+
+            #info.visible {
+                transform: none;
+                visibility: visible;
             }
 
             .ask-modes {

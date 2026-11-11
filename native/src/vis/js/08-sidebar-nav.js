@@ -680,6 +680,13 @@
             const types = [...counts.keys()].sort((a, b) =>
                 nodeTypeRank(a) - nodeTypeRank(b) || a.localeCompare(b));
             if (!types.length) { document.getElementById('legend').style.display = 'none'; return; }
+            // On a phone the legend's corner is where the view bar lives —
+            // the bar spans nearly the full width there (09-canvas.css), so
+            // an expanded legend opens on top of it. Start as the collapsed
+            // strip; tapping the head expands it above the bar.
+            if (smallViewport()) {
+                document.getElementById('legend').classList.add('is-collapsed');
+            }
             body.innerHTML = types.map(t => {
                 return `<div class="legend-row" data-type="${escapeHtml(t)}" title="Filter to ${escapeHtml(t)}">
                     ${nodeIconSvg(t)}

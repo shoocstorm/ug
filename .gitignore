@@ -29,3 +29,4 @@ prompt.md
 .agents
 *.code-workspace
 lcov.info
+dist/

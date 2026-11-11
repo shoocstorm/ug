@@ -67,11 +67,20 @@
             color: var(--text);
             overflow: hidden;
             min-height: 100vh;
+            min-height: 100dvh;
         }
 
         #container {
             width: 100vw;
             height: 100vh;
+            /* dvh, not just vh: on iOS Safari 100vh is the large viewport
+               (toolbars hidden), so everything anchored to this box's bottom
+               edge — the view bar, the legend, the gizmo, the canvas itself —
+               would sit behind the browser's toolbar and only partly show.
+               dvh tracks the visible viewport; the vh line above is the
+               fallback for browsers without it. Same treatment for the two
+               fixed panels (#sidebar, #info). */
+            height: 100dvh;
             position: relative;
             /* Dark backdrop matching the 3D scene, so there is no flash
                before the canvas initialises and the saturated node inks read

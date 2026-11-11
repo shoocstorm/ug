@@ -492,6 +492,13 @@
             const fill = document.getElementById('load-progress-bar');
             if (fill) fill.style.width = '';
 
+            // A phone has no room for a 384px panel over the canvas — below
+            // 720px it is 92vw wide, i.e. the whole screen. Start collapsed
+            // there; the launcher brings it back. Set before the `pending`
+            // class comes off, so the panel is never revealed open first.
+            if (smallViewport()) {
+                document.getElementById('sidebar').classList.add('collapsed');
+            }
             document.getElementById('sidebar').classList.remove('pending');
             document.getElementById('sidebar-launcher').classList.remove('pending');
             wireSidebarSections();

@@ -6,6 +6,12 @@
             right: 0;
             width: var(--info-width, 420px);
             height: 100vh;
+            /* iOS Safari's 100vh is the *large* viewport — toolbars hidden —
+               so a 100vh panel's bottom (and the tail of its scrolling body)
+               sits behind the URL bar and is never fully shown. dvh tracks
+               the visible viewport as toolbars collapse and expand. The vh
+               line above stays as the fallback for browsers without dvh. */
+            height: 100dvh;
             background: rgba(14, 18, 22, 0.85);
             backdrop-filter: blur(24px);
             border-left: 1px solid var(--border);

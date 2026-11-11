@@ -334,6 +334,15 @@
         // before asking. Matches the URL-state sync's window.
         const SEARCH_DEBOUNCE_MS = 400;
 
+        // Phone-class viewport. The number is the same 720px breakpoint the
+        // small-screen CSS blocks key off (01-chrome.css, 09-canvas.css,
+        // 20-trail.css) — layout decisions made in JS (sidebar starts
+        // collapsed, legend starts collapsed) have to agree with the ones
+        // CSS has already made by the time they run.
+        function smallViewport() {
+            return window.matchMedia('(max-width: 720px)').matches;
+        }
+
         // ─── Local mode past the string ceiling ────────────
         //
         // V8 caps a string at 536,870,888 characters, and the load below used

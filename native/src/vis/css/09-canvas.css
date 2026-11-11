@@ -752,3 +752,75 @@
         @keyframes vt-spin {
             to { transform: rotate(360deg); }
         }
+
+        /* ── Phones ──
+           At phone widths the bar cannot wrap and stay small: fifteen-ish
+           controls at desktop size ran to three rows, a quarter of the
+           viewport in landscape, sitting on top of the legend. So below
+           720px it becomes one compact, swipeable row pinned across the
+           bottom — fixed height, controls that do not fit swipe in from
+           the right (the half-visible button at the edge is the cue).
+           `flex-start` is load-bearing: a centred flex row with overflow
+           makes its left end permanently unreachable. */
+        @media (max-width: 720px) {
+            #viewbar {
+                left: 8px;
+                right: 8px;
+                /* Full width now, so the gutters the transform compensated
+                   for are gone with it. */
+                transform: none;
+                bottom: 8px;
+                max-width: none;
+                justify-content: flex-start;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                gap: 4px;
+                padding: 5px;
+            }
+
+            #viewbar .vbtn {
+                min-width: 36px;
+                padding: 5px 6px;
+                /* Nothing on a touch screen hovers, and the row scrolls —
+                   a flex item that shrank would clip its own label. */
+                flex-shrink: 0;
+            }
+
+            #viewbar .vtoggle {
+                min-width: 36px;
+                padding: 5px 6px;
+                flex-shrink: 0;
+            }
+
+            #viewbar .vsep {
+                margin: 3px 1px;
+            }
+
+            /* Everything that shared the bottom edge now sits clear of the
+               one-row bar (~45px + margin): the legend starts collapsed on
+               small screens (buildLegend) and expands upward from above it. */
+            #legend {
+                left: 8px;
+                bottom: 64px;
+            }
+
+            #axis-gizmo {
+                right: 8px;
+                bottom: 64px;
+            }
+
+            /* The breadcrumb bar is desktop furniture: on a phone it
+               competes with the title block for the top of the screen and
+               its crumbs are too narrow to read anyway. `nav-active`
+               normally hands the title's slot to the bar — with the bar
+               gone the title has to stay up, or every node click would
+               blank the top of the screen. */
+            #navbar {
+                display: none;
+            }
+
+            body.nav-active .header {
+                opacity: 1;
+                visibility: visible;
+            }
+        }

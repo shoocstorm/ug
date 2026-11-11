@@ -641,6 +641,13 @@
 
             info.classList.add('visible');
 
+            // The panel supersedes the hover tooltip — it carries everything
+            // the tooltip does and more. On a phone this is not just
+            // redundancy: a tap fires hover before click, the tooltip is
+            // z-index 1000, and nothing else would dismiss it from on top
+            // of the full-screen panel (no hover-out ever fires on touch).
+            document.getElementById('tooltip').classList.remove('visible');
+
             // Anchor focus on this node (unless we're mid neighbour-step, which
             // keeps the existing anchor) and record it in the nav history.
             if (!state.suppressFocusReanchor) enterFocus(d);

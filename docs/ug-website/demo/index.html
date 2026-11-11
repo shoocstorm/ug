@@ -77,11 +77,20 @@
             color: var(--text);
             overflow: hidden;
             min-height: 100vh;
+            min-height: 100dvh;
         }
 
         #container {
             width: 100vw;
             height: 100vh;
+            /* dvh, not just vh: on iOS Safari 100vh is the large viewport
+               (toolbars hidden), so everything anchored to this box's bottom
+               edge — the view bar, the legend, the gizmo, the canvas itself —
+               would sit behind the browser's toolbar and only partly show.
+               dvh tracks the visible viewport; the vh line above is the
+               fallback for browsers without it. Same treatment for the two
+               fixed panels (#sidebar, #info). */
+            height: 100dvh;
             position: relative;
             /* Dark backdrop matching the 3D scene, so there is no flash
                before the canvas initialises and the saturated node inks read
@@ -313,6 +322,32 @@
             height: 11px;
         }
 
+        /* ── Phones ──
+           The header block is only as wide as its widest line, and after
+           load the graph title shrinks to "N nodes, M edges" — narrower
+           than the badges row, which then wrapped two-to-a-line against
+           the narrowed block. One row, tighter chrome, small enough to
+           clear even a 320px screen. Same 720px breakpoint as the canvas
+           chrome's small-screen block (09-canvas.css). */
+        @media (max-width: 720px) {
+            .header-badges {
+                flex-wrap: nowrap;
+                gap: 5px;
+            }
+
+            .header-badge {
+                padding: 2px 6px;
+                gap: 3px;
+                font-size: 8px;
+                letter-spacing: 0.2px;
+            }
+
+            .header-badge svg {
+                width: 9px;
+                height: 9px;
+            }
+        }
+
         .health-badge {
             position: fixed;
             top: 16px;
@@ -373,6 +408,8 @@
             left: 0;
             width: var(--sidebar-width);
             height: 100vh;
+            /* Same iOS-toolbar clipping as #info (05-info-panel.css). */
+            height: 100dvh;
             background: rgba(14, 18, 22, 0.85);
             backdrop-filter: blur(24px);
             border-right: 1px solid var(--border);
@@ -1507,6 +1544,12 @@
             right: 0;
             width: var(--info-width, 420px);
             height: 100vh;
+            /* iOS Safari's 100vh is the *large* viewport — toolbars hidden —
+               so a 100vh panel's bottom (and the tail of its scrolling body)
+               sits behind the URL bar and is never fully shown. dvh tracks
+               the visible viewport as toolbars collapse and expand. The vh
+               line above stays as the fallback for browsers without dvh. */
+            height: 100dvh;
             background: rgba(14, 18, 22, 0.85);
             backdrop-filter: blur(24px);
             border-left: 1px solid var(--border);
@@ -5827,6 +5870,78 @@
         @keyframes vt-spin {
             to { transform: rotate(360deg); }
         }
+
+        /* ── Phones ──
+           At phone widths the bar cannot wrap and stay small: fifteen-ish
+           controls at desktop size ran to three rows, a quarter of the
+           viewport in landscape, sitting on top of the legend. So below
+           720px it becomes one compact, swipeable row pinned across the
+           bottom — fixed height, controls that do not fit swipe in from
+           the right (the half-visible button at the edge is the cue).
+           `flex-start` is load-bearing: a centred flex row with overflow
+           makes its left end permanently unreachable. */
+        @media (max-width: 720px) {
+            #viewbar {
+                left: 8px;
+                right: 8px;
+                /* Full width now, so the gutters the transform compensated
+                   for are gone with it. */
+                transform: none;
+                bottom: 8px;
+                max-width: none;
+                justify-content: flex-start;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                gap: 4px;
+                padding: 5px;
+            }
+
+            #viewbar .vbtn {
+                min-width: 36px;
+                padding: 5px 6px;
+                /* Nothing on a touch screen hovers, and the row scrolls —
+                   a flex item that shrank would clip its own label. */
+                flex-shrink: 0;
+            }
+
+            #viewbar .vtoggle {
+                min-width: 36px;
+                padding: 5px 6px;
+                flex-shrink: 0;
+            }
+
+            #viewbar .vsep {
+                margin: 3px 1px;
+            }
+
+            /* Everything that shared the bottom edge now sits clear of the
+               one-row bar (~45px + margin): the legend starts collapsed on
+               small screens (buildLegend) and expands upward from above it. */
+            #legend {
+                left: 8px;
+                bottom: 64px;
+            }
+
+            #axis-gizmo {
+                right: 8px;
+                bottom: 64px;
+            }
+
+            /* The breadcrumb bar is desktop furniture: on a phone it
+               competes with the title block for the top of the screen and
+               its crumbs are too narrow to read anyway. `nav-active`
+               normally hands the title's slot to the bar — with the bar
+               gone the title has to stay up, or every node click would
+               blank the top of the screen. */
+            #navbar {
+                display: none;
+            }
+
+            body.nav-active .header {
+                opacity: 1;
+                visibility: visible;
+            }
+        }
 /* ==== 10-chat-render.css ==== */
         /* ─── Chat: live turn (progress strip, reasoning, tools) ─── */
 
@@ -9998,7 +10113,36 @@ body:has(#info.visible) #perf-hud {
             }
 
             #info {
-                width: 92vw;
+                /* Full-bleed: edges pinned to the viewport, `width` derived —
+                   not `right: 0` plus a vw width. A width form leaves the
+                   right edge's placement to the engine's viewport math, and
+                   iOS Safari placed it partly off-screen (the panel's right
+                   side sat outside the visible viewport). Insets of 0 clamp
+                   the box to exactly the viewport by construction. */
+                left: 0;
+                right: 0;
+                width: auto;
+                /* Above every piece of persistent chrome — the sidebar
+                   launcher (41), the resize handles and perf HUD (42) — so
+                   nothing pokes through the full-screen sheet. Still below
+                   the transient layers (tour/walk cards at 60, dialogs at
+                   200+, tooltips at 1000) that can open over it. */
+                z-index: 50;
+                /* Hiding is a slide past the right edge on desktop
+                   (05-info-panel.css). On a phone that off-screen box
+                   widens the *layout viewport* — measured:
+                   window.innerWidth grew 390 → 448 while the panel sat
+                   hidden — and the panel's own geometry then re-resolves
+                   against the widened viewport, pushing its right side
+                   off-screen. Hide in place instead; the slide is not
+                   worth the feedback loop on a screen this size. */
+                transform: none;
+                visibility: hidden;
+            }
+
+            #info.visible {
+                transform: none;
+                visibility: visible;
             }
 
             .ask-modes {
@@ -10840,7 +10984,7 @@ body:has(#info.visible) #perf-hud {
         }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":4812,"edges":17478,"files":146,"lines":107607,"ugVersion":"0.1.22","visFingerprint":"ac9f4ce65ce9d7eb","generatedAt":1790859703};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":4812,"edges":17478,"files":146,"lines":107607,"ugVersion":"0.1.23","visFingerprint":"ed2477a25025c5ea","generatedAt":1794400179};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -13449,6 +13593,15 @@ traverse({
         // How long a live search input waits for the typing to pause
         // before asking. Matches the URL-state sync's window.
         const SEARCH_DEBOUNCE_MS = 400;
+
+        // Phone-class viewport. The number is the same 720px breakpoint the
+        // small-screen CSS blocks key off (01-chrome.css, 09-canvas.css,
+        // 20-trail.css) — layout decisions made in JS (sidebar starts
+        // collapsed, legend starts collapsed) have to agree with the ones
+        // CSS has already made by the time they run.
+        function smallViewport() {
+            return window.matchMedia('(max-width: 720px)').matches;
+        }
 
         // ─── Local mode past the string ceiling ────────────
         //
@@ -16745,6 +16898,13 @@ self.onmessage = async (ev) => {
             const fill = document.getElementById('load-progress-bar');
             if (fill) fill.style.width = '';
 
+            // A phone has no room for a 384px panel over the canvas — below
+            // 720px it is 92vw wide, i.e. the whole screen. Start collapsed
+            // there; the launcher brings it back. Set before the `pending`
+            // class comes off, so the panel is never revealed open first.
+            if (smallViewport()) {
+                document.getElementById('sidebar').classList.add('collapsed');
+            }
             document.getElementById('sidebar').classList.remove('pending');
             document.getElementById('sidebar-launcher').classList.remove('pending');
             wireSidebarSections();
@@ -21368,6 +21528,13 @@ self.onmessage = async (ev) => {
             const types = [...counts.keys()].sort((a, b) =>
                 nodeTypeRank(a) - nodeTypeRank(b) || a.localeCompare(b));
             if (!types.length) { document.getElementById('legend').style.display = 'none'; return; }
+            // On a phone the legend's corner is where the view bar lives —
+            // the bar spans nearly the full width there (09-canvas.css), so
+            // an expanded legend opens on top of it. Start as the collapsed
+            // strip; tapping the head expands it above the bar.
+            if (smallViewport()) {
+                document.getElementById('legend').classList.add('is-collapsed');
+            }
             body.innerHTML = types.map(t => {
                 return `<div class="legend-row" data-type="${escapeHtml(t)}" title="Filter to ${escapeHtml(t)}">
                     ${nodeIconSvg(t)}
@@ -28416,6 +28583,13 @@ self.onmessage = async (ev) => {
             }
 
             info.classList.add('visible');
+
+            // The panel supersedes the hover tooltip — it carries everything
+            // the tooltip does and more. On a phone this is not just
+            // redundancy: a tap fires hover before click, the tooltip is
+            // z-index 1000, and nothing else would dismiss it from on top
+            // of the full-screen panel (no hover-out ever fires on touch).
+            document.getElementById('tooltip').classList.remove('visible');
 
             // Anchor focus on this node (unless we're mid neighbour-step, which
             // keeps the existing anchor) and record it in the nav history.
