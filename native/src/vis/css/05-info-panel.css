@@ -68,6 +68,12 @@
             background: var(--bg-hover);
         }
 
+        /* Phone label for the close button — shown only by the small-screen
+           block in 20-trail.css, which turns it into a labelled pill. */
+        #info-close .close-label {
+            display: none;
+        }
+
         #info-body {
             flex: 1;
             min-height: 0;

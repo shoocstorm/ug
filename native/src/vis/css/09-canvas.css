@@ -769,7 +769,14 @@
                 /* Full width now, so the gutters the transform compensated
                    for are gone with it. */
                 transform: none;
-                bottom: 8px;
+                /* Well off the bottom edge: iOS reserves the bottom sliver
+                   of the screen for the home/swipe-up system gesture, and
+                   touches there never reach the page — a bar pinned at the
+                   edge could not be horizontally scrolled at all. (The
+                   page does not use viewport-fit=cover, so
+                   env(safe-area-inset-bottom) is 0 here; the pixel margin
+                   is the whole clearance.) */
+                bottom: 28px;
                 max-width: none;
                 justify-content: flex-start;
                 flex-wrap: nowrap;
@@ -797,16 +804,17 @@
             }
 
             /* Everything that shared the bottom edge now sits clear of the
-               one-row bar (~45px + margin): the legend starts collapsed on
-               small screens (buildLegend) and expands upward from above it. */
+               one-row bar (~45px tall, 28px up + margin): the legend starts
+               collapsed on small screens (buildLegend) and expands upward
+               from above it. */
             #legend {
                 left: 8px;
-                bottom: 64px;
+                bottom: 84px;
             }
 
             #axis-gizmo {
                 right: 8px;
-                bottom: 64px;
+                bottom: 84px;
             }
 
             /* The breadcrumb bar is desktop furniture: on a phone it

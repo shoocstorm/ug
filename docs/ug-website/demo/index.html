@@ -1606,6 +1606,12 @@
             background: var(--bg-hover);
         }
 
+        /* Phone label for the close button — shown only by the small-screen
+           block in 20-trail.css, which turns it into a labelled pill. */
+        #info-close .close-label {
+            display: none;
+        }
+
         #info-body {
             flex: 1;
             min-height: 0;
@@ -5887,7 +5893,14 @@
                 /* Full width now, so the gutters the transform compensated
                    for are gone with it. */
                 transform: none;
-                bottom: 8px;
+                /* Well off the bottom edge: iOS reserves the bottom sliver
+                   of the screen for the home/swipe-up system gesture, and
+                   touches there never reach the page — a bar pinned at the
+                   edge could not be horizontally scrolled at all. (The
+                   page does not use viewport-fit=cover, so
+                   env(safe-area-inset-bottom) is 0 here; the pixel margin
+                   is the whole clearance.) */
+                bottom: 28px;
                 max-width: none;
                 justify-content: flex-start;
                 flex-wrap: nowrap;
@@ -5915,16 +5928,17 @@
             }
 
             /* Everything that shared the bottom edge now sits clear of the
-               one-row bar (~45px + margin): the legend starts collapsed on
-               small screens (buildLegend) and expands upward from above it. */
+               one-row bar (~45px tall, 28px up + margin): the legend starts
+               collapsed on small screens (buildLegend) and expands upward
+               from above it. */
             #legend {
                 left: 8px;
-                bottom: 64px;
+                bottom: 84px;
             }
 
             #axis-gizmo {
                 right: 8px;
-                bottom: 64px;
+                bottom: 84px;
             }
 
             /* The breadcrumb bar is desktop furniture: on a phone it
@@ -10145,6 +10159,42 @@ body:has(#info.visible) #perf-hud {
                 visibility: visible;
             }
 
+            /* A full-screen sheet needs one unmissable way out, and nothing
+               else: the header's other icon buttons (keep, find-path,
+               copy-link, jump) are precision-pointer tools, and beside a
+               44px Close pill they would just be clutter. `!important`
+               because jump-btn's visibility is set as an inline style from
+               handleClick. */
+            #info .info-actions .icon-btn:not(#info-close) {
+                display: none !important;
+            }
+
+            #info-close {
+                flex-shrink: 0;
+                min-height: 44px;
+                min-width: 44px;
+                padding: 0 16px;
+                gap: 7px;
+                justify-content: center;
+                align-items: center;
+                margin-left: 8px;
+                background: rgba(var(--accent-rgb), 0.14);
+                border: 1px solid rgba(var(--accent-rgb), 0.4);
+                border-radius: 10px;
+                color: var(--accent);
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            #info-close svg {
+                width: 17px;
+                height: 17px;
+            }
+
+            #info-close .close-label {
+                display: inline;
+            }
+
             .ask-modes {
                 flex-wrap: wrap;
             }
@@ -10984,7 +11034,7 @@ body:has(#info.visible) #perf-hud {
         }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":4812,"edges":17478,"files":146,"lines":107607,"ugVersion":"0.1.23","visFingerprint":"ed2477a25025c5ea","generatedAt":1794400179};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":4812,"edges":17478,"files":146,"lines":107607,"ugVersion":"0.1.23","visFingerprint":"ce294bc9dcba8103","generatedAt":1794401288};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -13184,6 +13234,9 @@ traverse({
                             <line x1="18" y1="6" x2="6" y2="18" />
                             <line x1="6" y1="6" x2="18" y2="18" />
                         </svg>
+                        <!-- Labelled pill on phones only (20-trail.css): a
+                             full-screen sheet needs an unmissable way out. -->
+                        <span class="close-label">Close</span>
                     </button>
                 </div>
             </div>

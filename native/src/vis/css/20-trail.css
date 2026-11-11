@@ -425,6 +425,42 @@
                 visibility: visible;
             }
 
+            /* A full-screen sheet needs one unmissable way out, and nothing
+               else: the header's other icon buttons (keep, find-path,
+               copy-link, jump) are precision-pointer tools, and beside a
+               44px Close pill they would just be clutter. `!important`
+               because jump-btn's visibility is set as an inline style from
+               handleClick. */
+            #info .info-actions .icon-btn:not(#info-close) {
+                display: none !important;
+            }
+
+            #info-close {
+                flex-shrink: 0;
+                min-height: 44px;
+                min-width: 44px;
+                padding: 0 16px;
+                gap: 7px;
+                justify-content: center;
+                align-items: center;
+                margin-left: 8px;
+                background: rgba(var(--accent-rgb), 0.14);
+                border: 1px solid rgba(var(--accent-rgb), 0.4);
+                border-radius: 10px;
+                color: var(--accent);
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            #info-close svg {
+                width: 17px;
+                height: 17px;
+            }
+
+            #info-close .close-label {
+                display: inline;
+            }
+
             .ask-modes {
                 flex-wrap: wrap;
             }
