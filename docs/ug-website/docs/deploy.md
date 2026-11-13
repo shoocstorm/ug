@@ -21,8 +21,9 @@ landing page will not stream from a plain `file://`.
 panel, for one, polls `localhost:8000/admin/api/stats` once a second and its
 404s bury the four lines the demo actually logs. 8080 is `ug serve`. If a page
 misbehaves on a shared port, suspect a neighbour before suspecting the demo:
-serving the demo should produce exactly four requests, all 200 —
-`/demo/`, `graph.json`, `ug-vis.bundle.js`, `favicon.svg`. Anything else in
+serving the demo should produce a handful of requests, all 200 — `/demo/`,
+`graph.json`, the two renderer bundles, `favicon.svg`. The `wllama/<v>/…`
+files join only if you start an in-browser model. Anything else in
 the log came from something else on your machine.
 
 ## Deploy
@@ -43,7 +44,10 @@ only when asked.
 `https://ultra-graph.web.app/demo/` is a real indexed repo a visitor can fly
 before installing anything. It is the same visualization page `ug serve`
 serves, next to a `graph.json` snapshot and a static stand-in for the server
-— no database, no vectors, no backend.
+— no database, no vectors, no backend. One server feature does run here: a
+visitor can download a small model into the tab (runtime at `wllama/<v>/`,
+COOP/COEP headers from `firebase.json` let it use real threads) and Ask's
+Answer mode answers from the published graph, with clickable citations.
 
 ## Regenerate it
 

@@ -58,9 +58,9 @@ use super::io::die;
 /// change worth a warning at publish time.
 const SOLO_THRESHOLD: usize = 200_000;
 
-/// A short hash of everything that decides what the demo *renders*: the
-/// assembled visualization page, the shim wrapped around it, and both
-/// renderer bundles.
+/// A short hash of everything that decides what the demo *renders and does*:
+/// the assembled visualization page, the shim wrapped around it, both renderer
+/// bundles, and the vendored wllama runtime the shim's in-browser model loads.
 ///
 /// Stamped into `demo.json` so staleness becomes a *fact* rather than
 /// something a person has to remember. The published page is a copy of a
@@ -71,15 +71,19 @@ const SOLO_THRESHOLD: usize = 200_000;
 /// that silence turns into a failing test naming the command that fixes it.
 ///
 /// The bundles are in the hash because they are shipped files too. Re-vendor
-/// cosmos.gl without them and the demo keeps serving the old renderer with
-/// an `index.html` that still matches — the exact silent staleness this
-/// guard exists to prevent, one level down.
+/// cosmos.gl without them and the demo keeps serving the old renderer with an
+/// `index.html` that still matches — the exact silent staleness this guard
+/// exists to prevent, one level down. The wllama files are in it for the
+/// same reason: a re-vendored runtime changes what the model panel can do
+/// even though no `src/vis/` file moved.
 fn vis_fingerprint() -> String {
     fingerprint_of(&[
         crate::assets::VIS_HTML.as_bytes(),
         crate::assets::VIS_DEMO_SHIM.as_bytes(),
         crate::assets::VIS_THREEJS_BUNDLE,
         crate::assets::VIS_COSMOS_BUNDLE,
+        crate::assets::WLLAMA_JS,
+        crate::assets::WLLAMA_WASM,
     ])
 }
 
@@ -95,6 +99,39 @@ fn fingerprint_of(parts: &[&[u8]]) -> String {
         hasher.update(b"\0");
     }
     hasher.finalize().to_hex()[..16].to_string()
+}
+
+/// The wllama runtime files a published demo carries, as `(relative path,
+/// bytes)` pairs.
+///
+/// The demo's model panel runs llama.cpp-in-wasm in the visitor's tab (see
+/// `src/vis/js/28-local-llm.js`), and the app loads that runtime from the
+/// server at `/wllama/<version>/…`. A static host has no such route, so the
+/// runtime ships *with* the demo and the shim points the page at these
+/// relative paths — resolved against the page, so the folder works at any
+/// base URL. Same files, same versioned folder as `ug serve` uses; the
+/// version segment keeps a re-vendored runtime from colliding with a cached
+/// one.
+fn wllama_files() -> Vec<(String, &'static [u8])> {
+    let dir = format!("wllama/{}", crate::assets::WLLAMA_VERSION);
+    vec![
+        (format!("{dir}/wllama.js"), crate::assets::WLLAMA_JS),
+        (format!("{dir}/wllama.wasm"), crate::assets::WLLAMA_WASM),
+    ]
+}
+
+/// The manifest block that tells the shim where those files are, in the
+/// shape `local_llm.runtime` already has on the server (`js` / `wasm`).
+fn llm_manifest() -> serde_json::Value {
+    serde_json::json!({
+        "version": crate::assets::WLLAMA_VERSION,
+        // Relative on purpose: the demo must work from `/demo/`, from a
+        // preview channel, and from `python3 -m http.server` in the folder.
+        // The shim resolves them against the page before handing them to
+        // wllama, whose worker would otherwise resolve them against a blob:.
+        "js": format!("wllama/{}/wllama.js", crate::assets::WLLAMA_VERSION),
+        "wasm": format!("wllama/{}/wllama.wasm", crate::assets::WLLAMA_VERSION),
+    })
 }
 
 /// Where `ug demo` writes when the caller names no `-o`.
@@ -249,6 +286,17 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Write one file of the published demo, creating any parent directories
+/// (`wllama/<version>/` does not exist until the first publish that has it).
+fn write_under(output_dir: &str, name: &str, bytes: &[u8]) -> std::io::Result<u64> {
+    let path = format!("{output_dir}/{name}");
+    if let Some(parent) = Path::new(&path).parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, bytes)?;
+    Ok(bytes.len() as u64)
+}
+
 /// `--page-only`: rebuild the published page from this binary, leaving the
 /// graph snapshot alone.
 ///
@@ -284,6 +332,9 @@ fn run_page_refresh(output_dir: &str, args: &[String]) {
         ("ugVersion", serde_json::json!(env!("CARGO_PKG_VERSION"))),
         ("visFingerprint", serde_json::json!(vis_fingerprint())),
         ("generatedAt", serde_json::json!(now_secs())),
+        // Derived from the binary like the fingerprint, not from the
+        // snapshot, so a refresh after a wllama re-vendor republishes it.
+        ("llm", llm_manifest()),
     ] {
         obj.insert(key.to_string(), value);
     }
@@ -307,15 +358,20 @@ fn run_page_refresh(output_dir: &str, args: &[String]) {
     let page = build_demo_page(&manifest, &label);
 
     let write = |name: &str, bytes: &[u8]| {
-        let path = format!("{output_dir}/{name}");
-        fs::write(&path, bytes).unwrap_or_else(|e| die(1, format!("failed to write {path}: {e}")));
-        bytes.len() as u64
+        write_under(output_dir, name, bytes)
+            .unwrap_or_else(|e| die(1, format!("failed to write {output_dir}/{name}: {e}")))
     };
     let html = write("index.html", page.as_bytes());
     write("threejs-vis.bundle.js", crate::assets::VIS_THREEJS_BUNDLE);
     write("cosmos-vis.bundle.js", crate::assets::VIS_COSMOS_BUNDLE);
     write("favicon.svg", crate::assets::VIS_FAVICON);
     write("README.md", readme(&label).as_bytes());
+    // Runtime for the in-browser model: a page asset like the bundles, not a
+    // fact about the snapshot, so `--page-only` publishes it too.
+    let wllama = wllama_files();
+    for (path, bytes) in &wllama {
+        write(path, bytes);
+    }
     write(
         "demo.json",
         serde_json::to_string_pretty(&manifest)
@@ -424,20 +480,23 @@ pub(crate) fn run_demo(args: &[String]) {
         "ugVersion": env!("CARGO_PKG_VERSION"),
         "visFingerprint": vis_fingerprint(),
         "generatedAt": now_secs(),
+        // Where the in-browser model's runtime lives in this folder. Absent
+        // in demos published before the feature — the shim treats a missing
+        // block as "no model here", same as a 501 from the old shim.
+        "llm": llm_manifest(),
     });
 
     fs::create_dir_all(&output_dir)
         .unwrap_or_else(|e| die(1, format!("cannot create {output_dir}: {e}")));
 
     let write = |name: &str, bytes: &[u8]| -> u64 {
-        let path = format!("{output_dir}/{name}");
-        fs::write(&path, bytes).unwrap_or_else(|e| die(1, format!("failed to write {path}: {e}")));
-        bytes.len() as u64
+        write_under(&output_dir, name, bytes)
+            .unwrap_or_else(|e| die(1, format!("failed to write {output_dir}/{name}: {e}")))
     };
 
     let page = build_demo_page(&manifest, &label);
     let mut total = 0u64;
-    let sizes = [
+    let mut sizes = vec![
         ("graph.json", write("graph.json", graph.as_bytes())),
         ("index.html", write("index.html", page.as_bytes())),
         (
@@ -463,6 +522,13 @@ pub(crate) fn run_demo(args: &[String]) {
         ),
         ("README.md", write("README.md", readme(&label).as_bytes())),
     ];
+    // The in-browser model's runtime — fetched only when a visitor actually
+    // starts a model, but published with everything else so the demo never
+    // depends on a CDN.
+    let wllama = wllama_files();
+    for (path, bytes) in &wllama {
+        sizes.push((path.as_str(), write(path, bytes)));
+    }
 
     println!("{C_BOLD}────────────────────────────────────────{C_RESET}");
     println!(
@@ -534,8 +600,11 @@ fn readme(label: &str) -> String {
          `index.html` is the same visualization page `ug serve` serves, wrapped in\n\
          a static stand-in for the server (`native/src/vis/demo-shim.js`). It reads\n\
          `graph.json` from this directory and needs no backend. Everything that\n\
-         does need one — semantic search, chat, guided tours, statistics, source\n\
+         does need one — semantic search, guided tours, statistics, source\n\
          preview — is off, and the page says so where a visitor would look.\n\
+         The one server feature that runs without a server is here: a visitor\n\
+         can download a small model into the tab and Answer mode answers from\n\
+         the published graph. `wllama/` holds that model's runtime.\n\
          \n\
          `demo.json` is the same manifest the page is built with: label, counts,\n\
          `ug` version, generation time.\n"
@@ -570,11 +639,14 @@ fn print_demo_help() {
     println!("  index.html          the visualization, wrapped for static hosting");
     println!("  threejs-vis.bundle.js    the 3D renderer (three.js)");
     println!("  cosmos-vis.bundle.js  the 2D renderer (cosmos.gl)");
+    println!("  wllama/<version>/    llama.cpp-in-wasm, for the optional in-browser model");
     println!("  favicon.svg  demo.json  README.md");
     println!();
     println!("{C_BOLD}Not included{C_RESET}  {C_DIM}— these need the local index and cannot be published{C_RESET}");
-    println!("  Semantic and hybrid search · chat · guided tours · statistics and GQL");
-    println!("  · source preview. Keyword search, filters, focus and walk all work.");
+    println!("  Semantic and hybrid search · guided tours · statistics and GQL");
+    println!("  · source preview. Keyword search, filters, focus and walk all work — and a");
+    println!("  visitor can download a small model into the tab to get grounded Answer");
+    println!("  mode over the published graph.");
     println!();
     println!("{C_BOLD}Privacy{C_RESET}");
     println!("  A published graph contains file paths, symbol names and docstrings from");
@@ -651,9 +723,19 @@ mod tests {
         let fp = |parts: &[&str]| {
             fingerprint_of(&parts.iter().map(|p| p.as_bytes()).collect::<Vec<_>>())
         };
-        let base = fp(&["<html>page</html>", "shim();", "three();", "cosmos();"]);
-        for (i, label) in ["page", "shim", "three bundle", "cosmos bundle"].iter().enumerate() {
-            let mut parts = vec!["<html>page</html>", "shim();", "three();", "cosmos();"];
+        let base = fp(&["<html>page</html>", "shim();", "three();", "cosmos();", "wllama();", "wasm();"]);
+        for (i, label) in ["page", "shim", "three bundle", "cosmos bundle", "wllama js", "wllama wasm"]
+            .iter()
+            .enumerate()
+        {
+            let mut parts = vec![
+                "<html>page</html>",
+                "shim();",
+                "three();",
+                "cosmos();",
+                "wllama();",
+                "wasm();",
+            ];
             parts[i] = "changed";
             assert_ne!(base, fp(&parts), "{label} edit must move the fingerprint");
         }
@@ -663,7 +745,31 @@ mod tests {
             fp(&["a", "bc"]),
             "the boundary between parts must be part of the hash"
         );
-        assert_eq!(base, fp(&["<html>page</html>", "shim();", "three();", "cosmos();"]), "stable");
+        assert_eq!(
+            base,
+            fp(&["<html>page</html>", "shim();", "three();", "cosmos();", "wllama();", "wasm();"]),
+            "stable"
+        );
+    }
+
+    /// The runtime has to land where the manifest says it does — the two are
+    /// written apart, and a visitor's model download fails on any drift.
+    #[test]
+    fn the_llm_manifest_names_files_the_publisher_writes() {
+        let manifest = llm_manifest();
+        for (key, file) in [("js", "wllama.js"), ("wasm", "wllama.wasm")] {
+            let path = manifest.get(key).and_then(|v| v.as_str()).unwrap_or("");
+            let expected = format!("wllama/{}/{}", crate::assets::WLLAMA_VERSION, file);
+            assert_eq!(path, expected, "manifest {key} must name the published path");
+            assert!(
+                wllama_files().iter().any(|(p, _)| *p == expected),
+                "the publisher must write {expected}"
+            );
+        }
+        // The vendored runtime is what gets written, and it is not empty.
+        for (_, bytes) in wllama_files() {
+            assert!(!bytes.is_empty());
+        }
     }
 
     /// **The live demo ships a copy of the visualization page, and a copy

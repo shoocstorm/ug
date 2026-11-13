@@ -8,6 +8,11 @@
   "files": 146,
   "lines": 107607,
   "ugVersion": "0.1.23",
-  "visFingerprint": "ce294bc9dcba8103",
-  "generatedAt": 1794401288
+  "visFingerprint": "31a66142025f7e4e",
+  "generatedAt": 1794494749,
+  "llm": {
+    "version": "3.6.1",
+    "js": "wllama/3.6.1/wllama.js",
+    "wasm": "wllama/3.6.1/wllama.wasm"
+  }
 }

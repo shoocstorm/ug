@@ -396,7 +396,10 @@ when asked.**
 The one generated directory under the website: a real indexed repo a visitor
 can fly before installing anything. `ug demo` writes it — `graph.json` plus the
 visualization page, wrapped in a static stand-in for the server. No database,
-no vectors, no backend. It deploys with the site because `"public": "."`
+no vectors, no backend — but the one feature whose engine lives in the page
+works: a visitor can download a small model into the tab (runtime shipped at
+`wllama/<version>/`) and Ask's Answer mode answers from the published graph,
+with citations. It deploys with the site because `"public": "."`
 publishes the whole folder.
 
 **Editing `native/src/vis/` changes two deployments, not one.** The app gets
@@ -438,10 +441,17 @@ here lands:
 - **The demo's behaviour lives in one file**, `native/src/vis/demo-shim.js`.
   Nothing under `native/src/vis/js/` knows the demo exists, and it must stay
   that way — that is what stops the demo and the real app from drifting. The
-  shim answers `/healthz`, `/api/projects` and `/api/capabilities` and refuses
-  every other `/api/*`; a fetch to a path outside that prefix, or a new
-  blocking startup request, reaches a static host with no such route. Teach the
-  shim, never branch on "am I the demo" inside `js/`.
+  shim answers `/healthz`, `/api/projects`, `/api/capabilities`, the whole
+  `/api/llm/local/*` loop and `/api/chat` (the in-browser model: the shim is
+  the "server" — it emulates the SSE job feed with an `EventSource` wrapper,
+  does keyword retrieval over `graph.json`, and streams the answer back; see
+  the shim's §1b), and refuses every other `/api/*`; a fetch to a path
+  outside that prefix, or a new blocking startup request, reaches a static
+  host with no such route. Teach the shim, never branch on "am I the demo"
+  inside `js/`. The model's runtime ships with the demo (`wllama/<version>/`,
+  written by `ug demo` and mirrored into the manifest's `llm` block), and
+  `firebase.json` sends COOP/COEP headers on `/demo/**` so wllama can use
+  real threads — without them it falls back to single-threaded, ~9× slower.
 - **Commit the generated files.** The deploy publishes the working tree.
 - **The landing page's counts need no maintenance.** `index.html` reads
   `demo/demo.json` at load time to fill `.demo-facts`; the numbers in the

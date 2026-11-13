@@ -235,7 +235,7 @@
       width: 38px;
       height: 38px;
       border-radius: 10px;
-      border: 1px solid var(--line-strong);
+      border: none;
       background: var(--panel);
       color: var(--ink-soft);
       cursor: pointer;
@@ -271,6 +271,10 @@
 
     @media (max-width: 760px) {
       .nav-links {
+        display: none;
+      }
+
+      .nav-cta .btn {
         display: none;
       }
     }
@@ -1524,9 +1528,11 @@
              graph. Rotate it, filter by symbol type, focus a node and walk its
              callers.</p>
           <a class="arrow-btn" href="demo/">Open the live demo <span>→</span></a>
-          <p class="fineprint">Runs entirely in your browser. Semantic search, chat,
-             guided tours and whole-repo statistics read the index ug builds on your
-             machine, so they're off in the demo — it says so where they'd appear.</p>
+           <p class="fineprint">Runs entirely in your browser. Semantic search, guided
+              tours and whole-repo statistics read the index ug builds on your
+              machine, so they're off in the demo — it says so where they'd appear.
+              Asking questions isn't: download a small model into the tab and it
+              answers from the published graph, citations included.</p>
         </div>
         <div class="demo-facts" id="demoFacts">
           <div class="demo-fact"><span class="n" data-demo="nodes">2,939</span><span class="k">nodes</span></div>
