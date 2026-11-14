@@ -10,6 +10,14 @@ into the Rust, it is embedded verbatim by `assets.rs` and served as bytes.
 | `wllama.js` | `@wllama/wllama@3.6.1` → `esm/index.js` (unminified, self-contained: no imports, no source map) |
 | `wllama.wasm` | `@wllama/wllama@3.6.1` → `esm/wasm/wllama.wasm` |
 | `LICENCE` | the package's own MIT licence |
+| `compat/wllama.js` | `@wllama/wllama-compat@3.6.1` → `wasm/wllama.js` (the worker script) |
+| `compat/wllama.wasm` | `@wllama/wllama-compat@3.6.1` → `wasm/wllama.wasm` |
+
+The `compat/` pair is the same runtime built without Memory64 and JSPI. It is
+the only build Safari can run, so it is what an iPhone loads; other browsers
+never fetch it. It adds about 15 MB to the binary. wllama's own fallback is to
+fetch these two from jsDelivr, which the next section rules out — and a worker
+cannot be started from another origin anyway.
 
 Upstream: <https://github.com/ngxson/wllama> (MIT).
 
@@ -29,7 +37,15 @@ tar xzf wllama-wllama-<new-version>.tgz
 cp package/esm/index.js       native/vendor/wllama/wllama.js
 cp package/esm/wasm/wllama.wasm native/vendor/wllama/wllama.wasm
 cp package/LICENCE            native/vendor/wllama/LICENCE
+
+npm pack @wllama/wllama-compat@<new-version>
+tar xzf wllama-wllama-compat-<new-version>.tgz
+cp package/wasm/wllama.js    native/vendor/wllama/compat/wllama.js
+cp package/wasm/wllama.wasm  native/vendor/wllama/compat/wllama.wasm
 ```
+
+The two packages must be the same version: the page pairs the default
+`wllama.js` with whichever wasm the browser can run.
 
 Then bump `WLLAMA_VERSION` in `native/src/assets.rs` — it is the cache-busting
 segment in the asset URL, so a new runtime that keeps the old version string

@@ -84,6 +84,8 @@ fn vis_fingerprint() -> String {
         crate::assets::VIS_COSMOS_BUNDLE,
         crate::assets::WLLAMA_JS,
         crate::assets::WLLAMA_WASM,
+        crate::assets::WLLAMA_COMPAT_JS,
+        crate::assets::WLLAMA_COMPAT_WASM,
     ])
 }
 
@@ -117,6 +119,15 @@ fn wllama_files() -> Vec<(String, &'static [u8])> {
     vec![
         (format!("{dir}/wllama.js"), crate::assets::WLLAMA_JS),
         (format!("{dir}/wllama.wasm"), crate::assets::WLLAMA_WASM),
+        // The build Safari runs — an iPhone visitor loads these two instead.
+        (
+            format!("{dir}/compat/wllama.js"),
+            crate::assets::WLLAMA_COMPAT_JS,
+        ),
+        (
+            format!("{dir}/compat/wllama.wasm"),
+            crate::assets::WLLAMA_COMPAT_WASM,
+        ),
     ]
 }
 
@@ -131,6 +142,10 @@ fn llm_manifest() -> serde_json::Value {
         // wllama, whose worker would otherwise resolve them against a blob:.
         "js": format!("wllama/{}/wllama.js", crate::assets::WLLAMA_VERSION),
         "wasm": format!("wllama/{}/wllama.wasm", crate::assets::WLLAMA_VERSION),
+        "compat": {
+            "worker": format!("wllama/{}/compat/wllama.js", crate::assets::WLLAMA_VERSION),
+            "wasm": format!("wllama/{}/compat/wllama.wasm", crate::assets::WLLAMA_VERSION),
+        },
     })
 }
 
@@ -761,6 +776,15 @@ mod tests {
             let path = manifest.get(key).and_then(|v| v.as_str()).unwrap_or("");
             let expected = format!("wllama/{}/{}", crate::assets::WLLAMA_VERSION, file);
             assert_eq!(path, expected, "manifest {key} must name the published path");
+            assert!(
+                wllama_files().iter().any(|(p, _)| *p == expected),
+                "the publisher must write {expected}"
+            );
+        }
+        for (key, file) in [("worker", "compat/wllama.js"), ("wasm", "compat/wllama.wasm")] {
+            let path = manifest["compat"][key].as_str().unwrap_or("");
+            let expected = format!("wllama/{}/{}", crate::assets::WLLAMA_VERSION, file);
+            assert_eq!(path, expected, "manifest compat.{key} must name the published path");
             assert!(
                 wllama_files().iter().any(|(p, _)| *p == expected),
                 "the publisher must write {expected}"

@@ -49,6 +49,15 @@ pub(crate) fn build_router(state: ServeState) -> Router {
         // and served under its version so an 8 MB wasm can be cached hard.
         .route("/wllama/:version/wllama.js", get(handle_wllama_js))
         .route("/wllama/:version/wllama.wasm", get(handle_wllama_wasm))
+        // The build Safari can run (no Memory64, no JSPI) — see assets.rs.
+        .route(
+            "/wllama/:version/compat/wllama.js",
+            get(handle_wllama_compat_js),
+        )
+        .route(
+            "/wllama/:version/compat/wllama.wasm",
+            get(handle_wllama_compat_wasm),
+        )
         .route("/graph.json", get(handle_graph))
         .route("/indexed-tree.json", get(handle_indexed_tree))
         .route("/healthz", get(handle_health))
@@ -192,6 +201,27 @@ async fn handle_wllama_js(headers: HeaderMap) -> Response {
 }
 
 async fn handle_wllama_wasm() -> Response {
+    wasm_response(crate::assets::WLLAMA_WASM)
+}
+
+/// The compat build's worker script. The page starts a worker from this URL
+/// directly, so it must be same-origin JavaScript — which it is.
+async fn handle_wllama_compat_js(headers: HeaderMap) -> Response {
+    static JS: OnceLock<EncodedAsset> = OnceLock::new();
+    let asset = JS.get_or_init(|| {
+        EncodedAsset::new(
+            crate::assets::WLLAMA_COMPAT_JS.to_vec(),
+            "text/javascript; charset=utf-8",
+        )
+    });
+    immutable(asset_response(asset, &headers))
+}
+
+async fn handle_wllama_compat_wasm() -> Response {
+    wasm_response(crate::assets::WLLAMA_COMPAT_WASM)
+}
+
+fn wasm_response(bytes: &'static [u8]) -> Response {
     // Deliberately *not* through `EncodedAsset`: brotli-9 over 8 MB costs
     // seconds of CPU on the first request to save bytes on a transfer that is
     // almost always loopback, and the browser caches the result either way.
@@ -199,11 +229,8 @@ async fn handle_wllama_wasm() -> Response {
         Response::builder()
             .status(StatusCode::OK)
             .header(axum::http::header::CONTENT_TYPE, "application/wasm")
-            .header(
-                axum::http::header::CONTENT_LENGTH,
-                crate::assets::WLLAMA_WASM.len(),
-            )
-            .body(axum::body::Body::from(crate::assets::WLLAMA_WASM))
+            .header(axum::http::header::CONTENT_LENGTH, bytes.len())
+            .body(axum::body::Body::from(bytes))
             .expect("build response"),
     )
 }

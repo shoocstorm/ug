@@ -740,6 +740,11 @@ pub(crate) fn status_payload(state: &ServeState) -> Value {
             "version": crate::assets::WLLAMA_VERSION,
             "js": format!("/wllama/{}/wllama.js", crate::assets::WLLAMA_VERSION),
             "wasm": format!("/wllama/{}/wllama.wasm", crate::assets::WLLAMA_VERSION),
+            // The build for browsers that cannot run the default one (Safari).
+            "compat": {
+                "worker": format!("/wllama/{}/compat/wllama.js", crate::assets::WLLAMA_VERSION),
+                "wasm": format!("/wllama/{}/compat/wllama.wasm", crate::assets::WLLAMA_VERSION),
+            },
         },
         // What the window the page chose actually buys. The page shows this
         // next to the context-window picker so the trade is visible *before* a

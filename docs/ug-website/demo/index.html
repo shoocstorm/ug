@@ -11034,7 +11034,7 @@ body:has(#info.visible) #perf-hud {
         }
     </style>
 <script>
-window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":4812,"edges":17478,"files":146,"lines":107607,"ugVersion":"0.1.23","visFingerprint":"31a66142025f7e4e","generatedAt":1794494749,"llm":{"version":"3.6.1","js":"wllama/3.6.1/wllama.js","wasm":"wllama/3.6.1/wllama.wasm"}};
+window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#get-started","source":"https://github.com/shoocstorm/ug","nodes":4812,"edges":17478,"files":146,"lines":107607,"ugVersion":"0.1.23","visFingerprint":"f09f415a0603fbd3","generatedAt":1794646816,"llm":{"version":"3.6.1","js":"wllama/3.6.1/wllama.js","wasm":"wllama/3.6.1/wllama.wasm","compat":{"worker":"wllama/3.6.1/compat/wllama.js","wasm":"wllama/3.6.1/compat/wllama.wasm"}}};
 /* ==========================================================================
    UltraGraph — static demo shim
    ==========================================================================
@@ -11207,6 +11207,12 @@ window.UG_DEMO = {"label":"The UltraGraph engine","project":"src","install":"/#g
                 // from a blob: URL, where a relative path has no useful base.
                 js: absUrl(DEMO.llm.js),
                 wasm: absUrl(DEMO.llm.wasm),
+                // The build Safari runs. Absent in a demo published before
+                // it shipped; the page then has only the default build.
+                compat: DEMO.llm.compat ? {
+                    worker: absUrl(DEMO.llm.compat.worker),
+                    wasm: absUrl(DEMO.llm.compat.wasm),
+                } : null,
             },
             limits: { tools_min_n_ctx: DEMO_TOOLS_MIN_N_CTX },
             attached: a ? {
@@ -36650,6 +36656,7 @@ self.onmessage = async (ev) => {
                 bytes: 138 * 1024 * 1024,
                 tools: false,
                 sanity: true,
+                phone: true,
                 blurb: 'Downloads in seconds and answers instantly — there to prove the plumbing works, not to be useful. Expect confident nonsense.',
             },
             {
@@ -36666,6 +36673,26 @@ self.onmessage = async (ev) => {
                 // Advanced.
                 tools: false,
                 blurb: 'Quickest to download and the lightest to run. Narrates tours well. Answers from ug\u2019s retrieval rather than driving the graph tools itself — at this size that is the better trade.',
+            },
+            {
+                // The phone's model: the same Qwen3 0.6B at 4 bits a weight.
+                // The 639 MB Q8_0 above gets the page closed by iOS while it
+                // loads (the tab is over its memory limit and reloads with no
+                // error); this file is 397 MB and loads beside the graph.
+                // Pinned to a commit so the cached copy can never be half of
+                // one upload and half of another.
+                id: 'qwen3-0.6b-q4',
+                name: 'Qwen3 0.6B',
+                repo: 'unsloth/Qwen3-0.6B-GGUF',
+                rev: '50968a4468ef4233ed78cd7c3de230dd1d61a56b',
+                file: 'Qwen3-0.6B-Q4_K_M.gguf',
+                quant: 'Q4_K_M',
+                bytes: 396705472,
+                tools: false,
+                phone: true,
+                phoneOnly: true,
+                phonePick: true,
+                blurb: 'Sized for a phone: small enough that the browser keeps the page open while it loads. Answers from ug\u2019s retrieval, in short replies.',
             },
             {
                 id: 'qwen3-1.7b-q4',
@@ -36741,7 +36768,216 @@ self.onmessage = async (ev) => {
         }
 
         function llmModelUrl(entry) {
-            return `https://huggingface.co/${entry.repo}/resolve/main/${entry.file}`;
+            return `https://huggingface.co/${entry.repo}/resolve/${entry.rev || 'main'}/${entry.file}`;
+        }
+
+        // ── phones ─────────────────────────────────────────────────────
+        //
+        // iOS closes a Safari tab that grows past its memory limit. There is
+        // no error to catch: the page reloads. Everything in this section is
+        // about staying under that limit beside a live graph — a smaller
+        // file, a CPU-only load with a short window and a lean KV cache — and
+        // about saying what happened when it was not enough. The functions
+        // are pure and `tests/js/local_llm_phone.mjs` runs them directly.
+
+        function llmDetectDevice(nav) {
+            if (!nav) return { mobile: false, ios: false };
+            const ua = nav.userAgent || '';
+            // iPadOS reports itself as a Mac; only its touch screen tells it apart.
+            const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && (nav.maxTouchPoints || 0) > 1);
+            return { mobile: ios || /Android|Mobile/.test(ua), ios };
+        }
+
+        /// Whether wllama's default build (Memory64 + JSPI) can run here,
+        /// decided by compiling rather than by asking.
+        ///
+        /// wllama checks that `new WebAssembly.Memory({ address: 'i64' })`
+        /// does not throw. WebKit accepts that descriptor and still cannot
+        /// compile a Memory64 module, so on an iPhone wllama picks the default
+        /// build, its abort reaches only the console, and the load never
+        /// settles. The bytes are `(module (memory i64 1))`.
+        function llmDefaultBuildRuns(wasm) {
+            if (!wasm) return false;
+            try {
+                return !!wasm.Suspending && wasm.validate(
+                    new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x05, 0x03, 0x01, 0x04, 0x01]));
+            } catch (_) {
+                return false;
+            }
+        }
+
+        /// How much a load asks for, from most to least. Level 0 is what the
+        /// panel is set to. Level 1 is CPU only at 2 048 tokens — where every
+        /// phone starts. Level 2 is CPU at 1 024, tried after level 1 failed.
+        function llmLoadPlan(prefs, level, hasGpu) {
+            const want = Number(prefs && prefs.nCtx) || 4096;
+            if (level <= 0) return { level: 0, nCtx: want, gpu: !!(prefs && prefs.gpu) && !!hasGpu };
+            if (level === 1) return { level: 1, nCtx: Math.min(want, 2048), gpu: false };
+            return { level: 2, nCtx: Math.min(want, 1024), gpu: false };
+        }
+
+        /// Where a load starts: a phone at level 1, or lower than any level
+        /// that already failed on this device.
+        function llmStartLevel(device, failedBefore) {
+            if (!device.mobile) return 0;
+            return Math.min(2, Math.max(1, failedBefore || 0));
+        }
+
+        /// wllama's load options for a plan. The lighter plans also shrink
+        /// what llama.cpp allocates around the weights: a q8_0 KV cache (half
+        /// of f16 — a quantised V cache needs flash attention, which the CPU
+        /// backend has), one sequence instead of wllama's four, and 256-token
+        /// batches. Measured at 2 048 tokens: KV 224 → 119 MiB, compute
+        /// buffers 28 → 14 MiB. Level 0 is exactly what a desktop always got.
+        function llmLoadParams(plan, threads) {
+            const base = {
+                n_ctx: plan.nCtx,
+                // 0 also stops wllama from starting WebGPU at all.
+                n_gpu_layers: plan.gpu ? 999 : 0,
+                // Leave the machine something to draw with. wllama
+                // defaults to every core, which on a CPU-backed run means
+                // the renderer, the compositor and this page's own
+                // JavaScript are all fighting the model for a thread.
+                n_threads: threads,
+                // Keep `<think>` in the text we stream so this file can
+                // fold it away itself; the default parser routes it to a
+                // field the stream does not carry.
+                reasoning_format: 'none',
+            };
+            if (plan.level <= 0) return base;
+            return Object.assign(base, {
+                cache_type_k: 'q8_0',
+                cache_type_v: 'q8_0',
+                flash_attn: true,
+                n_parallel: 1,
+                n_batch: 256,
+                n_ubatch: 256,
+            });
+        }
+
+        function llmPlanText(plan) {
+            return `${plan.gpu ? 'GPU' : 'CPU only'}, ${plan.nCtx}-token window`;
+        }
+
+        /// Whether a model is offered on this device: 'offer', 'hide', or
+        /// 'tooBig' — already downloaded, cannot be loaded here, listed only
+        /// so its storage can be freed. A GGUF the visitor added by hand is
+        /// always offered; they chose it.
+        function llmListing(entry, device, cached) {
+            if (entry.custom) return 'offer';
+            if (device.mobile) return entry.phone ? 'offer' : (cached ? 'tooBig' : 'hide');
+            return entry.phoneOnly && !cached ? 'hide' : 'offer';
+        }
+
+        /// What kind of failure a load error is. Compile comes before memory:
+        /// an abort while compiling is not about memory, and asking for less
+        /// of it will not help.
+        function llmFailureKind(msg) {
+            if (/CompileError|doesn't parse|is not enabled/i.test(msg)) return 'compile';
+            if (/out of memory|\bOOM\b|bad_alloc|failed to allocate|could not allocate|unable to allocate|Cannot allocate|Cannot enlarge memory|memory access out of bounds|RangeError.*(memory|buffer|allocation)|Aborted\(/i.test(msg)) return 'memory';
+            if (/timed out starting/i.test(msg)) return 'timeout';
+            if (/QuotaExceeded|quota|NoModificationAllowed|not enough space/i.test(msg)) return 'storage';
+            if (/fetch|network|Failed to load|Load failed/i.test(msg)) return 'network';
+            return 'other';
+        }
+
+        /// A line in wllama's log that means its worker died. wllama only
+        /// logs these — the promise it returned never settles — so a load
+        /// watches the log instead of waiting out the time limit.
+        function llmIsFatalLog(line) {
+            return /Aborted\(|worker sent an error|Cannot enlarge memory|out of memory|RuntimeError/i.test(line);
+        }
+
+        /// Trim a prompt to what the loaded window can hold. The server
+        /// budgets its prompt for the window it was told about, so this is
+        /// the backstop for the small ones: llama.cpp fails a request longer
+        /// than the context outright. Sizes are estimated at 3 characters a
+        /// token, as the server does. Older turns go first, then the end of
+        /// the longest message; system messages and the last message stay.
+        function llmFitMessages(messages, nCtx, maxTokens) {
+            const budget = Math.max(600, (nCtx - maxTokens - 48) * 3);
+            const size = (ms) => ms.reduce((n, m) => n + (m.content || '').length + 12, 0);
+            let out = messages.slice();
+            while (size(out) > budget) {
+                // System messages are not turns: the second one is the
+                // retrieved context, which is the last thing to give up.
+                const old = out.findIndex((m, j) => m.role !== 'system' && j < out.length - 1);
+                if (old < 0) break;
+                out.splice(old, 1);
+            }
+            while (size(out) > budget) {
+                let i = 0;
+                out.forEach((m, j) => { if ((m.content || '').length > (out[i].content || '').length) i = j; });
+                const text = out[i].content || '';
+                if (text.length <= 200) break;
+                const keep = Math.max(200, text.length - (size(out) - budget) - 1);
+                out = out.map((m, j) => (j === i ? Object.assign({}, m, { content: text.slice(0, keep) + '…' }) : m));
+            }
+            return out;
+        }
+
+        const llmDevice = llmDetectDevice(typeof navigator === 'undefined' ? undefined : navigator);
+        const LLM_ATTEMPT_KEY = 'ug.localLlm.attempt';
+        const LLM_LEVEL_KEY = 'ug.localLlm.level';
+        const LLM_WARMUP_LIMIT_MS = 300000;
+
+        function llmStored(key, fallback) {
+            try {
+                const v = JSON.parse(localStorage.getItem(key) || 'null');
+                return v == null ? fallback : v;
+            } catch (_) {
+                return fallback;
+            }
+        }
+
+        function llmStore(key, value) {
+            try {
+                if (value == null) localStorage.removeItem(key);
+                else localStorage.setItem(key, JSON.stringify(value));
+            } catch (_) { /* ignore */ }
+        }
+
+        function llmFailedLevel(id) {
+            return llmStored(LLM_LEVEL_KEY, {})[id];
+        }
+
+        function llmSetFailedLevel(id, level) {
+            const all = llmStored(LLM_LEVEL_KEY, {});
+            all[id] = Math.min(2, level);
+            llmStore(LLM_LEVEL_KEY, all);
+        }
+
+        /// How the next load of `entry` will be asked for on this device.
+        function llmPlannedLoad(entry) {
+            return llmLoadPlan(llm.prefs, llmStartLevel(llmDevice, entry ? llmFailedLevel(entry.id) : 0), 'gpu' in navigator);
+        }
+
+        /// The window in force: the running model's, else the one the next
+        /// load will ask for. On a phone that is not the picker's value.
+        function llmCtx() {
+            return llm.nCtx || llmPlannedLoad(llm.entry || llmFindEntry(llm.prefs.last)).nCtx;
+        }
+
+        /// A load this page did not survive. The marker is written before
+        /// the model starts and removed when the load settles either way, so
+        /// finding one at boot means the tab itself went away mid-load. Says
+        /// so, and makes a phone's next try lighter.
+        function llmCheckCrashedLoad() {
+            const a = llmStored(LLM_ATTEMPT_KEY, null);
+            llmStore(LLM_ATTEMPT_KEY, null);
+            // Only a recent one counts: an old marker is from a tab someone closed.
+            if (!a || !a.id || Date.now() - a.at > 15 * 60000) return null;
+            const entry = llmFindEntry(a.id);
+            const name = entry ? entry.name : 'the model';
+            const tried = llmPlanText(llmLoadPlan(llm.prefs, a.level, 'gpu' in navigator));
+            const cause = `${llmDevice.ios ? 'iOS closed this page' : 'This page was closed'} while ${name} was starting (${tried}) — most likely it ran out of memory.`;
+            if (!llmDevice.mobile) return `${cause} Try a smaller model, or a smaller context window under Advanced.`;
+            if (a.level >= 2) {
+                return `${cause} That was already the smallest setting there is, so this device cannot run ${name} in the browser.`;
+            }
+            llmSetFailedLevel(a.id, a.level + 1);
+            const next = llmPlanText(llmLoadPlan(llm.prefs, a.level + 1, false));
+            return `${cause} The next try asks for less (${next}). Close other tabs and apps first.`;
         }
 
         function llmLoadPrefs() {
@@ -36862,7 +37098,7 @@ self.onmessage = async (ev) => {
                     const tools = llm.caps && llm.caps.attached && llm.caps.attached.tools;
                     facts.innerHTML = [
                         ['runs on', gpu ? 'the GPU (WebGPU)' : `the CPU · ${llm.threads || '?'} threads`],
-                        ['context window', `${llm.prefs.nCtx} tokens`],
+                        ['context window', `${llmCtx()} tokens`],
                         ['graph tools', tools ? `${tools} of them` : 'off — answers use ug\u2019s retrieval'],
                         ['answered here', llm.served ? `${llm.served} this session` : 'nothing yet'],
                     ].map(([k, v]) => `<span>${escapeHtml(k)} <b>${escapeHtml(String(v))}</b></span>`).join('');
@@ -36919,12 +37155,15 @@ self.onmessage = async (ev) => {
             for (const entry of llmEntries()) {
                 const url = llmModelUrl(entry);
                 const cachedBytes = llm.cached.get(url);
+                const listing = llmListing(entry, llmDevice, !!cachedBytes);
+                if (listing === 'hide') continue;
                 const isCurrent = llm.entry && llm.entry.id === entry.id;
                 const li = document.createElement('li');
                 li.className = 'llm-model' + (isCurrent && llm.attached ? ' active' : '');
 
                 const badges = [];
-                if (entry.recommended) badges.push('<span class="llm-badge rec">recommended</span>');
+                if (llmDevice.mobile ? entry.phonePick : entry.recommended) badges.push('<span class="llm-badge rec">recommended</span>');
+                if (listing === 'tooBig') badges.push('<span class="llm-badge">too big for a phone</span>');
                 if (entry.sanity) badges.push('<span class="llm-badge">try this first</span>');
                 if (cachedBytes) badges.push(`<span class="llm-badge cached">downloaded</span>`);
                 if (isCurrent && llm.attached) badges.push('<span class="llm-badge live">running</span>');
@@ -36937,7 +37176,9 @@ self.onmessage = async (ev) => {
                         ${badges.join('')}
                         <span class="llm-model-size">${cachedBytes ? llmBytes(cachedBytes) : '≈ ' + llmBytes(entry.bytes)}</span>
                     </div>
-                    <div class="llm-model-blurb">${escapeHtml(entry.blurb || entry.repo + '/' + entry.file)}</div>
+                    <div class="llm-model-blurb">${escapeHtml(listing === 'tooBig'
+                        ? 'Downloaded here, but the browser would close the page while loading it on a phone. Delete it to get the storage back.'
+                        : (entry.blurb || entry.repo + '/' + entry.file))}</div>
                     <div class="llm-model-actions"></div>`;
 
                 const actions = li.querySelector('.llm-model-actions');
@@ -36954,7 +37195,7 @@ self.onmessage = async (ev) => {
 
                 if (isCurrent && llm.attached) {
                     button('Stop using it', 'ghost', () => llmStop());
-                } else {
+                } else if (listing === 'offer') {
                     button(
                         cachedBytes ? 'Use this model' : `Download & use · ${llmBytes(entry.bytes)}`,
                         'primary',
@@ -36983,6 +37224,15 @@ self.onmessage = async (ev) => {
         function llmRenderCtxHint() {
             const hint = llmEl('llm-ctx-hint');
             if (!hint) return;
+            if (llmDevice.mobile) {
+                // The picker and the GPU switch are not choices here: a
+                // bigger window or a GPU context is what gets the page closed.
+                hint.textContent =
+                    `On a phone the model always runs on the CPU with a ${llmCtx()}-token window. `
+                    + 'A bigger window, or the GPU, takes more memory than the browser gives a page here, '
+                    + 'and it closes the page instead of reporting an error.';
+                return;
+            }
             const kv = llm.prefs.nCtx * LLM_KV_BYTES_PER_TOKEN;
             const min = llmToolsMinCtx();
             const tools = llm.prefs.nCtx >= min
@@ -37030,8 +37280,10 @@ self.onmessage = async (ev) => {
                 if (Number(input.value) > cap) input.value = String(cap);
                 input.classList.add('llm-capped');
                 input.title = `Capped at ${cap} — that is what fits in the `
-                    + `${llm.prefs.nCtx}-token window of ${llm.entry ? llm.entry.name : 'the local model'}. `
-                    + 'Raise the context window in the model panel for more.';
+                    + `${llmCtx()}-token window of ${llm.entry ? llm.entry.name : 'the local model'}. `
+                    + (llmDevice.mobile
+                        ? 'That is as large as a phone can hold.'
+                        : 'Raise the context window in the model panel for more.');
             }
         }
 
@@ -37074,9 +37326,15 @@ self.onmessage = async (ev) => {
             llmRenderModels();
             llmRenderCtxHint();
             const ctx = llmEl('llm-ctx');
-            if (ctx) ctx.value = String(llm.prefs.nCtx);
+            if (ctx) {
+                ctx.value = String(llm.prefs.nCtx);
+                ctx.disabled = llmDevice.mobile;
+            }
             const gpu = llmEl('llm-gpu');
-            if (gpu) gpu.checked = !!llm.prefs.gpu;
+            if (gpu) {
+                gpu.checked = !!llm.prefs.gpu && !llmDevice.mobile;
+                gpu.disabled = llmDevice.mobile;
+            }
             const think = llmEl('llm-think');
             if (think) think.checked = !!llm.prefs.think;
             const auto = llmEl('llm-auto');
@@ -37091,7 +37349,7 @@ self.onmessage = async (ev) => {
                 const min = llmToolsMinCtx();
                 const hint = llmEl('llm-tools-hint');
                 if (hint) {
-                    hint.textContent = llm.prefs.nCtx < min
+                    hint.textContent = llmCtx() < min
                         ? `Off whatever this says while the window is under ${min} tokens — there is no room for the schemas.`
                         : 'A model that is bad at tool calling answers better without them: ug retrieves for it instead.';
                 }
@@ -37148,15 +37406,96 @@ self.onmessage = async (ev) => {
             return llm.runtime;
         }
 
+        /// Make wllama use the build this browser can actually run.
+        ///
+        /// `setCompat` hands it our own copy of the compat build in place of
+        /// its CDN default — a worker cannot be started from another origin,
+        /// and the page has no external URLs. The override corrects the one
+        /// case wllama's own check gets wrong (see `llmDefaultBuildRuns`).
+        /// Firefox is left alone: wllama keeps it on the default build on
+        /// purpose, and `setCompat` leaves `compat` null there.
+        function llmUseCompat(wllama, compat) {
+            if (!compat) return;
+            wllama.setCompat(compat);
+            if (!wllama.compat || llmDefaultBuildRuns(typeof WebAssembly === 'undefined' ? null : WebAssembly)) return;
+            const own = wllama.getWorkerResources.bind(wllama);
+            wllama.getWorkerResources = () => {
+                const r = own();
+                return r.compat ? r : Object.assign({}, r, { wasmPath: compat.wasm, jsPath: compat.worker, compat: true });
+            };
+        }
+
+        /// wllama's logger, watched for the lines that mean its worker died.
+        function llmWatchedLogger(base, watch) {
+            const wrap = (fn) => (...args) => {
+                const line = args.map(v => (typeof Event !== 'undefined' && v instanceof Event)
+                    ? `worker error: ${v.message || v.type}`
+                    : String(v)).join(' ');
+                watch.last = line.replace(/\s+/g, ' ').trim().slice(0, 160);
+                if (!watch.fatal && llmIsFatalLog(line)) {
+                    watch.fatal = watch.last;
+                    if (watch.onFatal) watch.onFatal(watch.fatal);
+                }
+                fn.apply(base, args);
+            };
+            return { debug: wrap(base.debug), log: wrap(base.log), warn: wrap(base.warn), error: wrap(base.error) };
+        }
+
+        /// One attempt at loading already-downloaded weights under one plan.
+        ///
+        /// Marked in localStorage for as long as it runs: if the browser
+        /// closes the page here, the next boot finds the marker and can say
+        /// why (`llmCheckCrashedLoad`). Bounded by the log watch and a time
+        /// limit, because a dead worker leaves a promise that never settles.
+        async function llmWarmUp(runtime, entry, model, plan) {
+            const watch = { last: '', fatal: '', onFatal: null };
+            const rt = llm.caps.runtime;
+            const wllama = new runtime.Wllama(
+                { default: rt.wasm },
+                { modelManager: llm.models, logger: llmWatchedLogger(runtime.LoggerWithoutDebug, watch) },
+            );
+            llmUseCompat(wllama, rt.compat);
+            llmStore(LLM_ATTEMPT_KEY, { id: entry.id, level: plan.level, at: Date.now() });
+            let timer;
+            try {
+                await Promise.race([
+                    wllama.loadModel(model, llmLoadParams(plan, llmThreadBudget())),
+                    new Promise((_, reject) => {
+                        const stop = (why) => reject(new Error(why));
+                        timer = setTimeout(
+                            () => stop(`timed out starting the model${watch.last ? ` (last log: ${watch.last})` : ''}`),
+                            LLM_WARMUP_LIMIT_MS,
+                        );
+                        // The worker can die before this hook is set; the line is kept for that.
+                        if (watch.fatal) stop(watch.fatal);
+                        else watch.onFatal = stop;
+                    }),
+                ]);
+                return wllama;
+            } catch (err) {
+                await wllama.exit().catch(() => {});
+                throw err;
+            } finally {
+                clearTimeout(timer);
+                watch.onFatal = null;
+                llmStore(LLM_ATTEMPT_KEY, null);
+            }
+        }
+
         async function llmStart(entry) {
             if (llm.busy) return;
             if (!llmSupported()) {
                 llmSetPhase('unsupported');
                 return;
             }
+            if (llmListing(entry, llmDevice, true) !== 'offer') {
+                llmSetPhase('error', `${entry.name} ${entry.quant || ''} is too big for a phone: the browser would close the page while loading it.`);
+                return;
+            }
             llm.busy = true;
             llm.entry = entry;
             llm.served = 0;
+            llm.crashed = null;
             // Loading is as GPU-hungry as generating: the weights are being
             // uploaded and the context allocated.
             llmSetGraphPaused(true);
@@ -37164,30 +37503,17 @@ self.onmessage = async (ev) => {
             llmRenderModels();
 
             const started = performance.now();
+            let plan = null;
             try {
-                const { Wllama, LoggerWithoutDebug } = await llmRuntime();
+                const runtime = await llmRuntime();
                 if (llm.wllama) {
                     await llm.wllama.exit().catch(() => {});
                     llm.wllama = null;
                 }
-                const wllama = new Wllama(
-                    { default: llm.caps.runtime.wasm },
-                    { parallelDownloads: 3, logger: LoggerWithoutDebug },
-                );
 
-                const useGpu = !!llm.prefs.gpu && 'gpu' in navigator;
-                await wllama.loadModelFromUrl(llmModelUrl(entry), {
-                    n_ctx: llm.prefs.nCtx,
-                    n_gpu_layers: useGpu ? 999 : 0,
-                    // Leave the machine something to draw with. wllama
-                    // defaults to every core, which on a CPU-backed run means
-                    // the renderer, the compositor and this page's own
-                    // JavaScript are all fighting the model for a thread.
-                    n_threads: llmThreadBudget(),
-                    // Keep `<think>` in the text we stream so this file can
-                    // fold it away itself; the default parser routes it to a
-                    // field the stream does not carry.
-                    reasoning_format: 'none',
+                // Downloaded apart from loading, so a retry under a lighter
+                // plan starts from the file rather than from the network.
+                const model = await llm.models.getModelOrDownload({ url: llmModelUrl(entry) }, {
                     progressCallback: ({ loaded, total }) => {
                         const secs = (performance.now() - started) / 1000;
                         const rate = secs > 0 ? loaded / secs : 0;
@@ -37196,11 +37522,31 @@ self.onmessage = async (ev) => {
                     },
                 });
 
-                llmProgress(1, 'Starting the model…');
-                llmSetPhase('loading');
+                let wllama = null;
+                const first = llmStartLevel(llmDevice, llmFailedLevel(entry.id));
+                for (let level = first; !wllama; level++) {
+                    plan = llmLoadPlan(llm.prefs, level, 'gpu' in navigator);
+                    llmProgress(1, level > first ? `Trying again with less memory — ${llmPlanText(plan)}…` : 'Starting the model…');
+                    llmSetPhase('loading');
+                    try {
+                        wllama = await llmWarmUp(runtime, entry, model, plan);
+                    } catch (err) {
+                        // Only a phone steps down by itself: there the first
+                        // plan is a guess at a limit nobody can read. A
+                        // desktop asked for a specific window and is told.
+                        const kind = llmFailureKind(String((err && err.message) || err));
+                        const lighter = kind === 'memory' || kind === 'timeout' || kind === 'other';
+                        if (!llmDevice.mobile || !lighter || level >= 2) throw err;
+                        console.warn(`local model failed at ${llmPlanText(plan)}; trying less`, err);
+                        llmSetFailedLevel(entry.id, level + 1);
+                    }
+                }
+
                 llm.wllama = wllama;
+                llm.plan = plan;
+                llm.nCtx = plan.nCtx;
                 llm.threads = wllama.getNumThreads ? wllama.getNumThreads() : null;
-                llm.backend = useGpu && wllama.isSupportWebGPU && wllama.isSupportWebGPU() ? 'webgpu' : 'wasm';
+                llm.backend = plan.gpu && wllama.isSupportWebGPU && wllama.isSupportWebGPU() ? 'webgpu' : 'wasm';
                 entry.hasTemplate = !!(wllama.getChatTemplate && wllama.getChatTemplate());
 
                 await llmAttach();
@@ -37212,7 +37558,7 @@ self.onmessage = async (ev) => {
                 console.error('local model failed to start', err);
                 llmProgress(null);
                 llm.entry = null;
-                llmSetPhase('error', llmReadableError(err));
+                llmSetPhase('error', llmReadableError(err, plan));
             } finally {
                 llm.busy = false;
                 llmSetGraphPaused(false);
@@ -37221,18 +37567,35 @@ self.onmessage = async (ev) => {
             }
         }
 
-        function llmReadableError(err) {
+        /// `plan` is the load plan that failed, when the error is from a load.
+        function llmReadableError(err, plan) {
             const msg = String((err && err.message) || err || 'unknown error');
-            if (/out of memory|Cannot allocate|OOM/i.test(msg)) {
+            const kind = llmFailureKind(msg);
+            if (kind === 'compile') {
+                return `This browser cannot run the engine build ug picked for it (${msg.slice(0, 160)}). Update the browser.`;
+            }
+            if (kind === 'memory') {
+                if (llmDevice.mobile) {
+                    return `This ${llmDevice.ios ? 'iPhone' : 'phone'} ran out of memory${plan ? ` (tried ${llmPlanText(plan)})` : ''}. `
+                        + 'Close other tabs and apps, then try again.';
+                }
                 return 'This browser ran out of memory. Try a smaller model, or a smaller context window under Advanced.';
             }
-            if (/fetch|network|Failed to load/i.test(msg)) {
+            if (kind === 'timeout') {
+                return `The model did not finish starting, so it was stopped — ${msg}. Close other tabs and try again, or pick a smaller model.`;
+            }
+            if (kind === 'storage') {
+                return 'There is not enough storage in this browser to keep the model. Delete another downloaded model, then try again.';
+            }
+            if (kind === 'network') {
                 return 'The download failed — check the connection, then try again. Partial downloads are resumed.';
             }
             if (/context size|exceeds the available context|kv_cache_full|n_ctx/i.test(msg)) {
-                return `That prompt did not fit this model's ${llm.prefs.nCtx}-token window. `
-                    + 'Raise the context window under Advanced in the model panel (bigger window, more memory), '
-                    + 'or ask a narrower question.';
+                return `That prompt did not fit this model's ${llmCtx()}-token window. `
+                    + (llmDevice.mobile
+                        ? 'Ask a narrower question.'
+                        : 'Raise the context window under Advanced in the model panel (bigger window, more memory), '
+                          + 'or ask a narrower question.');
             }
             return msg;
         }
@@ -37252,6 +37615,8 @@ self.onmessage = async (ev) => {
                 llm.wllama = null;
             }
             llm.entry = null;
+            llm.plan = null;
+            llm.nCtx = null;
             llm.prefs.last = null;
             llmSavePrefs();
             llmSetPhase('off');
@@ -37280,7 +37645,9 @@ self.onmessage = async (ev) => {
                     client_id: llm.clientId,
                     model: llm.entry.id,
                     label: `${llm.entry.name} ${llm.entry.quant || ''}`.trim(),
-                    n_ctx: llm.prefs.nCtx,
+                    // What the model was loaded with, which on a phone is
+                    // less than the picker says. The server budgets from it.
+                    n_ctx: llmCtx(),
                     supports_tools: llmToolsWanted(llm.entry) && llm.entry.hasTemplate !== false,
                     backend: llm.backend,
                 }),
@@ -37413,9 +37780,14 @@ self.onmessage = async (ev) => {
             llm.running = { id: job.id, ctrl, tokens: 0, started: performance.now() };
             llmSetPhase('working');
 
+            const maxTokens = req.max_tokens || 512;
+            let messages = llmMessages(req.messages);
+            // Only the stepped-down plans: at the panel's own window the
+            // server's budget is the one that decides.
+            if (llm.plan && llm.plan.level > 0) messages = llmFitMessages(messages, llm.nCtx, maxTokens);
             const params = {
-                messages: llmMessages(req.messages),
-                max_tokens: req.max_tokens || 512,
+                messages,
+                max_tokens: maxTokens,
                 temp: typeof req.temperature === 'number' ? req.temperature : 0.3,
                 abortSignal: ctrl.signal,
                 chat_template_kwargs: { enable_thinking: !!llm.prefs.think },
@@ -37553,7 +37925,9 @@ self.onmessage = async (ev) => {
 
         let llmAutoStarted = false;
         function llmMaybeAutoStart() {
-            if (llmAutoStarted || !llm.prefs.auto || !llm.prefs.last) return;
+            // Not after a load that took the page down with it: the visitor
+            // reads why first, and starts the next try themselves.
+            if (llmAutoStarted || llm.crashed || !llm.prefs.auto || !llm.prefs.last) return;
             if (!llmSupported() || llm.busy || llm.attached || llm.foreign) return;
             const entry = llmFindEntry(llm.prefs.last);
             if (!entry) return;
@@ -37561,7 +37935,7 @@ self.onmessage = async (ev) => {
             // Only when the weights are already here: a page load must never
             // start a gigabyte-sized download on its own.
             llmRefreshCache().then(() => {
-                if (llm.cached.has(llmModelUrl(entry))) llmStart(entry);
+                if (llm.cached.has(llmModelUrl(entry)) && llmListing(entry, llmDevice, true) === 'offer') llmStart(entry);
             });
         }
 
@@ -37595,6 +37969,7 @@ self.onmessage = async (ev) => {
 
         (function initLocalLlm() {
             llmLoadPrefs();
+            llm.crashed = llmCheckCrashedLoad();
             llm.clientId = `tab-${Math.random().toString(36).slice(2, 10)}`;
 
             const overlay = llmOverlayEl();
@@ -37672,11 +38047,14 @@ self.onmessage = async (ev) => {
                         return;
                     }
                     llm.caps = status;
-                    const { ModelManager } = await llmRuntime();
-                    llm.models = new ModelManager();
+                    const { ModelManager, LoggerWithoutDebug } = await llmRuntime();
+                    // The one manager every load goes through, so the
+                    // download settings live here.
+                    llm.models = new ModelManager({ parallelDownloads: 3, logger: LoggerWithoutDebug });
                     llmConnect();
                     await llmRefreshCache();
-                    llmSetPhase('off');
+                    if (llm.crashed) llmSetPhase('error', llm.crashed);
+                    else llmSetPhase('off');
                     llmMaybeAutoStart();
                 })
                 .catch(() => llmSetPhase('unsupported'));

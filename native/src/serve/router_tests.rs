@@ -2011,6 +2011,37 @@ async fn the_wllama_runtime_is_served_from_the_binary() {
     let (status, body) = get(&app, &format!("/wllama/{version}/wllama.js")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("Wllama"), "the ES module did not come through");
+
+    // The build Safari runs: the status payload names it, and both of its
+    // files are there. An iPhone has no other way to load a model.
+    let (_, status_body) = get(&app, "/api/llm/local/status").await;
+    let v: serde_json::Value = serde_json::from_str(&status_body).unwrap();
+    let compat = &v["runtime"]["compat"];
+    let (status, body) = get(&app, compat["worker"].as_str().unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.is_empty(), "the compat worker script did not come through");
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(compat["wasm"].as_str().unwrap())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers().get("content-type").unwrap(), "application/wasm");
+    assert!(res.headers().get("content-encoding").is_none());
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..4], b"\0asm", "that is not a WebAssembly module");
+    assert_ne!(
+        bytes.len(),
+        crate::assets::WLLAMA_WASM.len(),
+        "the compat route served the default build"
+    );
 }
 
 #[tokio::test]

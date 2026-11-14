@@ -170,6 +170,12 @@
                 // from a blob: URL, where a relative path has no useful base.
                 js: absUrl(DEMO.llm.js),
                 wasm: absUrl(DEMO.llm.wasm),
+                // The build Safari runs. Absent in a demo published before
+                // it shipped; the page then has only the default build.
+                compat: DEMO.llm.compat ? {
+                    worker: absUrl(DEMO.llm.compat.worker),
+                    wasm: absUrl(DEMO.llm.compat.wasm),
+                } : null,
             },
             limits: { tools_min_n_ctx: DEMO_TOOLS_MIN_N_CTX },
             attached: a ? {

@@ -391,10 +391,47 @@ same code whether the tokens come from a hosted API or from the tab.
 the binary (vendored in `native/vendor/wllama/`, ~8.5 MB). The version is in
 the path because both are served `immutable` for a year — see
 `native/vendor/wllama/README.md` for the upgrade steps.
+`GET /wllama/<version>/compat/wllama.js` and `…/compat/wllama.wasm` are the
+same runtime built without Memory64 and JSPI (~15 MB) — the only build Safari
+can run. The status payload names them under `runtime.compat`, and only a
+browser that needs them fetches them.
+
+### On a phone
+
+iOS closes a Safari tab that grows past its memory limit. There is no error:
+the page reloads. The 639 MB Qwen3 0.6B (Q8_0) does that while loading, so a
+phone gets a different path, all of it in `vis/js/28-local-llm.js`:
+
+| | desktop | phone |
+|---|---|---|
+| Models offered | the whole catalog | SmolLM2 135M and Qwen3 0.6B **Q4_K_M** (397 MB, pinned to a commit) |
+| Runs on | WebGPU when there is one | the CPU, always |
+| Context window | the picker (default 8 192) | 2 048, then 1 024 if that failed |
+| KV cache | f16 | q8_0 with flash attention — half the size |
+| Sequences / batch | wllama's 4 / default | 1 / 256 |
+| wllama build | default | compat on Safari, decided by compiling a Memory64 module |
+
+The picker and the GPU switch are disabled there and the panel says why. A
+bigger model that is already downloaded is listed with only a Delete button.
+The window the model *actually* loaded with is what the page reports in
+`attach`, so the server budgets the prompt for it; at the stepped-down
+windows the page also trims the prompt itself (`llmFitMessages`) before
+llama.cpp can reject it.
+
+A load is marked in `localStorage` while it runs. If the browser closes the
+page mid-load, the next visit finds the marker, says what happened, does not
+auto-start, and asks for less on the next try. A load that fails with a
+memory error steps down by itself, without downloading again.
+
+**Checked in Chrome made to look like an iPhone (its user agent and screen,
+JSPI removed), not on an iPhone.** That proves the model list, the compat
+build, the load options and the step-down. It cannot prove the page stays
+under iOS's memory limit — desktop Chrome has no such limit.
 
 ### Checking it
 
-`cargo nextest run -E 'test(local_llm)'` covers the hub and the routes.
+`cargo nextest run -E 'test(local_llm)'` covers the hub and the routes, and
+the phone's load decisions (`tests/js/local_llm_phone.mjs`).
 `scripts/local-llm-bench.mjs` measures what freezing the graph is worth (it
 needs a visible window — see Agents.md §11s for why headless cannot answer).
 Neither can cover the browser half, so `scripts/local-llm-e2e.mjs` does: it

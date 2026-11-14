@@ -23,7 +23,8 @@ panel, for one, polls `localhost:8000/admin/api/stats` once a second and its
 misbehaves on a shared port, suspect a neighbour before suspecting the demo:
 serving the demo should produce a handful of requests, all 200 — `/demo/`,
 `graph.json`, the two renderer bundles, `favicon.svg`. The `wllama/<v>/…`
-files join only if you start an in-browser model. Anything else in
+files join only if you start an in-browser model (on Safari, the ones under
+`wllama/<v>/compat/`). Anything else in
 the log came from something else on your machine.
 
 ## Deploy

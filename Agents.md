@@ -2665,6 +2665,42 @@ indexing "fine" from a garbage tree the whole time.
   `UG_HOME`; the crash names a rayon worker, not a path, and `lldb` showed a
   single frame from the overflowed stack.
 
+### 11u. A phone does not report running out of memory — it reloads the page
+
+The in-browser model "failed on an iPhone" with no error anywhere, for two
+unrelated reasons that had to be fixed together.
+
+**Safari cannot run wllama's default build, and wllama cannot tell.** Its
+check is `new WebAssembly.Memory({ address: 'i64' })` not throwing. WebKit
+accepts the descriptor and still cannot compile a Memory64 module, so wllama
+picks the default build, the abort reaches only the console, and
+`loadModel()` never settles. `llmDefaultBuildRuns` decides by
+`WebAssembly.validate` on a 13-byte Memory64 module instead, and the compat
+build is vendored (`native/vendor/wllama/compat/`) because wllama's fallback
+is a CDN. Two rules follow: **ask a runtime whether it can do a thing by
+making it do the thing**, and **never await a wllama load without a time
+limit and a watch on its log** — a dead worker is only ever logged.
+
+**iOS closes a tab that is over its memory limit; nothing throws.** The
+639 MB Q8_0 file at the default 8 192-token window is well past it. The fix
+is not one number: a phone is offered a 397 MB file, loads on the CPU at
+2 048 tokens with a q8_0 KV cache, one sequence and 256-token batches
+(`llmLoadParams`), and marks the load in `localStorage` so the *next* page
+load can say what happened and ask for less. All of it is pure and under
+`tests/js/local_llm_phone.mjs`, because none of it can be seen failing from
+the machine it is written on.
+
+- The window the model loaded with is not the picker's value on a phone.
+  Everything downstream reads `llmCtx()`, and `attach` reports that number,
+  or the server budgets a prompt for a window that does not exist.
+- `COEP: credentialless` is not implemented by Safari. A page served with it
+  is simply not cross-origin isolated there, and the model runs on one
+  thread. `firebase.json` sends `require-corp` for `/demo/**`, like
+  `ug serve` does.
+- **Chrome with an iPhone user agent verifies the logic, not the limit.**
+  Desktop Chrome will happily hold 1.5 GB. Only a real iPhone answers "does
+  it stay open", and a change in this area is not verified until one has.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

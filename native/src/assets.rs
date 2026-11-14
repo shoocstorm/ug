@@ -47,3 +47,11 @@ pub(crate) const WLLAMA_JS: &[u8] = include_bytes!("../vendor/wllama/wllama.js")
 /// llama.cpp as WebAssembly. Served uncompressed and byte-for-byte: this is
 /// the one asset the page instantiates rather than parses.
 pub(crate) const WLLAMA_WASM: &[u8] = include_bytes!("../vendor/wllama/wllama.wasm");
+/// The same runtime built without Memory64 and JSPI (`@wllama/wllama-compat`),
+/// as a worker script and its wasm. Safari can only run this one: WebKit
+/// cannot compile a Memory64 module, so on an iPhone the default build never
+/// finishes loading. Fetched only by a browser that needs it — the page
+/// decides (`llmDefaultBuildRuns` in `vis/js/28-local-llm.js`).
+pub(crate) const WLLAMA_COMPAT_JS: &[u8] = include_bytes!("../vendor/wllama/compat/wllama.js");
+pub(crate) const WLLAMA_COMPAT_WASM: &[u8] =
+    include_bytes!("../vendor/wllama/compat/wllama.wasm");
